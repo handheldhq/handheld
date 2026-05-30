@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.tinysnapshot.v2">
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:debuggable="false"
+        android:label="Tiny Snapshot Helper v2"
+        android:testOnly="true"
+        android:theme="@android:style/Theme.NoDisplay" />
+
+    <instrumentation
+        android:name=".TinyV2Instrumentation"
+        android:targetPackage="com.example.tinysnapshot.v2"
+        android:label="Tiny Snapshot Helper v2"
+        android:functionalTest="true" />
+</manifest>

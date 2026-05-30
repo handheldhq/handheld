@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# android build artifacts (rebuild via scripts/build-tiny-v2-helper.sh)
+android/tiny-snapshot-helper-v2-build/
+
+# local runtime state
+.mu/
+.turbo/
+
+# benchmarks / scratch
+bench-results/
+
+# os
+.DS_Store
