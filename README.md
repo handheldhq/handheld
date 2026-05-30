@@ -3,6 +3,10 @@
 CLI for Handheld cloud phone control through Gateway profiles, sessions, file
 push, and live transports. Cross-platform (macOS, Linux, Windows).
 
+> **Agents:** read [`install.md`](install.md) first — it orients you on install,
+> connecting to a cloud or local device, and the snapshot → act loop. This README is
+> the full command reference.
+
 ## Install
 
 ```bash
