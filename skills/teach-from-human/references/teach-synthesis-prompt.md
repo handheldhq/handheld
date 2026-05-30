@@ -105,10 +105,14 @@ For each essential step:
   raw pixel coordinates as the primary target. Only when no stable semantic
   handle exists (unlabeled custom view, canvas/game UI) may you fall back to the
   normalized [0,1] coordinate, and you MUST flag it as a brittle fallback.
-- Include a checkpoint: a mechanically-evaluable `wait_for` condition the agent
-  can check to verify the step succeeded. Use one of the conditions the
-  handheld `wait_for` tool supports: `stable` (UI settled), `text` (a visible
-  string appeared), `ref` (a ref is present), or `change` (the layout changed).
+- Include a checkpoint: an assertion the agent confirms against the **settled
+  post-action snapshot**. Every handheld action settles automatically (it waits
+  until the UI is stable) and returns the post-action snapshot, so the checkpoint
+  is NOT a wait call — it is what to verify on that snapshot. Use one of: `text`
+  (an expected visible string is present), `node` (a node with a given
+  resource-id/label is present, optionally in an expected state), or `screen`
+  (the expected package/activity is foreground). Pick the most meaningful
+  assertion for the step's outcome.
 - Include the screen context (package + activity, or the app name) for the step.
 
 ## 6. Command Name
@@ -132,7 +136,9 @@ account {account_number}".
 
 The synthesis produces one workflow object (the `workflow.json`). Mobile deltas
 from the holotab "guide" schema: `start_url` → `start_app`; `steps[].url` →
-`steps[].screen`; `checkpoint` is a structured `wait_for` condition.
+`steps[].screen`; `checkpoint` is a snapshot assertion checked on the settled
+post-action snapshot (handheld actions settle automatically — there is no
+explicit wait call).
 
 ```jsonc
 {
@@ -164,14 +170,14 @@ from the holotab "guide" schema: `start_url` → `start_app`; `steps[].url` →
     {
       "action": "Open the payees screen",                 // imperative verb phrase
       "details": "Tap the floating Add-payee button (@by-id:com.bank.app:id/fab_add, label \"Add payee\")",
-      "checkpoint": { "condition": "text", "value": "Add Payee", "timeoutMs": 5000 },
+      "checkpoint": { "expect": "text", "value": "Add Payee" },  // verified on the settled snapshot
       "screen": "com.bank.app/.PayeesActivity"            // replaces holotab steps[].url
     },
     {
       "action": "Enter the payee name",
       "details": "Fill the Name field (@by-id:com.bank.app:id/name) with {payee_name}",
       "args": { "tool": "fill", "target": "@by-id:com.bank.app:id/name", "text": "{payee_name}" },
-      "checkpoint": { "condition": "stable", "timeoutMs": 3000 },
+      "checkpoint": { "expect": "screen", "value": "com.bank.app/.AddPayeeActivity" },
       "screen": "com.bank.app/.AddPayeeActivity"
     }
   ],
@@ -189,9 +195,10 @@ Field meanings (only the mobile-specific ones; the rest match B):
 - `steps[].details` — targets by `@by-id:<resource-id>` first, then
   `find(text=...)` label, then a normalized-coord fallback flagged as brittle.
   Never a raw pixel pair.
-- `steps[].checkpoint` — a structured `wait_for` condition
-  (`{ condition: "stable"|"text"|"ref"|"change", value?, timeoutMs? }`),
-  mechanically evaluable at replay.
+- `steps[].checkpoint` — a snapshot assertion
+  (`{ expect: "text"|"node"|"screen", value }`) confirmed against the settled
+  post-action snapshot. Handheld actions settle automatically (no explicit wait
+  call); the checkpoint is the verification, not the wait.
 - `steps[].args` (optional) — the concrete MCP tool call for deterministic
   replay (`tool` + target template + text template). Credential text is a
   `{credential}` reference, never a literal.
