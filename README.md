@@ -22,12 +22,20 @@ npx handheld i
 `handheld i` opens a browser login, stores the issued API key in
 `~/.handheld/config.json`, starts a trial cloud phone when available, connects relay
 and ADB transports, starts the bundled Tiny helper when a device command path is available, and
-redirects the approval tab to that phone's live device view. For existing keys,
-the manual fallback still works:
+redirects the approval tab to that phone's live device view.
+
+**Already have a key? `init` runs headlessly — no browser.** When an API key is
+already available (the `HANDHELD_API_KEY` env var, or a prior
+`handheld config set api-key`), `handheld init` skips the browser sign-in and
+provisions the trial phone directly with that key. This is the CI / agent path:
 
 ```bash
+export HANDHELD_API_KEY=<your-api-key>
+handheld init                 # creates + connects a device, no CLI auth prompt
+# or set it once in config instead of the env var:
 handheld config set api-key <your-api-key>
 handheld config set api-url <your-api-url>
+handheld init
 ```
 
 ## Profiles And Sessions

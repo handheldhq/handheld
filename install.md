@@ -36,18 +36,28 @@ phone unprompted (it uses trial quota / billing).
 
 ### A) Cloud phone — `handheld init`
 
-The product's onboarding. Signs in via the browser, stores an org API key in
-`~/.handheld/config.json`, claims a trial cloud phone, and connects transports.
+The product's onboarding. Claims a trial cloud phone and connects transports.
+**How it authenticates depends on whether a key is already available:**
 
-```bash
-handheld init                    # opens a browser login — ask the user to complete it
-# handheld init --no-open        # print the login URL instead of opening a browser (headless)
-# handheld init --with-adb       # also request provider ADB (when the device offers it)
-```
+- **You're an agent / headless / CI, and you HAVE a key** — set it first; `init`
+  then skips the browser entirely and provisions directly. No human, no browser:
 
-The browser step needs the user. After it returns, `handheld status` shows the
-connected device. Existing key already configured? Use `handheld connect <device-id>`
-(`handheld devices` lists them).
+  ```bash
+  export HANDHELD_API_KEY=<key>     # or: handheld config set api-key <key>
+  handheld init                     # "Using configured API key — skipping browser sign-in." → device ready
+  ```
+
+- **No key yet (interactive human at a terminal)** — `init` opens a browser login
+  for the user to complete, then provisions:
+
+  ```bash
+  handheld init                    # opens a browser login — the user completes it
+  # handheld init --with-adb       # also request provider ADB (when the device offers it)
+  ```
+
+After it returns, `handheld status` shows the connected device; `handheld devices`
+lists all profiles. (`handheld create` is the alias that only ever provisions with a
+configured key — `init` now covers that case too.)
 
 ### B) Local device / emulator — `handheld connect --local`
 
