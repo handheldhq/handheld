@@ -36,6 +36,7 @@ import {
   connectDevice as connectCommandDevice,
   connectLocalDevice as connectLocalCommandDevice,
 } from "../commands/connect.js";
+import { startTeachDetached } from "../commands/teach.js";
 import {
   beginActionWait,
   finishActionWait,
@@ -393,6 +394,26 @@ const TOOLS = [
       properties: {
         deviceId: { type: "string", description: "Device ID to disconnect" },
       },
+    },
+  },
+  {
+    name: "teach_request",
+    description:
+      "Ask a human to DEMONSTRATE a device task you cannot do autonomously. Opens the live viewer in the human's browser to take over and record; returns immediately with an envelope path to POLL. Use only when genuinely stuck (see the teach-from-human skill's four gates). Non-blocking: poll the envelope until status is 'ready', then run the teach-from-human skill on the captured trajectory.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        objective: {
+          type: "string",
+          description: "One-line description of the task the human will demonstrate",
+        },
+        package: {
+          type: "string",
+          description: "Android package the workflow is keyed to (optional hint)",
+        },
+        deviceId: { type: "string", description: "Target cloud device (optional; defaults to the active connection)" },
+      },
+      required: ["objective"],
     },
   },
   {
@@ -797,6 +818,7 @@ const CORE_MCP_TOOL_NAMES = new Set([
   "home",
   "recent",
   "shell",
+  "teach_request",
 ]);
 
 function listVisibleTools(): typeof TOOLS {
@@ -1882,6 +1904,34 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
           );
           return {
             content: [{ type: "text", text: JSON.stringify({ ok: true, deviceId: disconnected }) }],
+          };
+        }
+
+        case "teach_request": {
+          const objective = String(args?.objective ?? "").trim();
+          if (!objective) {
+            return { content: [{ type: "text", text: "objective is required" }], isError: true };
+          }
+          const reqDevice = typeof args?.deviceId === "string" ? args.deviceId : deviceId;
+          const conn = resolveConnection(reqDevice);
+          const targetDeviceId = conn?.deviceId ?? reqDevice;
+          const started = startTeachDetached({
+            objective,
+            deviceId: targetDeviceId,
+            package: typeof args?.package === "string" ? args.package : undefined,
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  ...started,
+                  status: "waiting",
+                  instruction:
+                    "A live viewer is opening in the human's browser to demonstrate. This is non-blocking: poll envelopePath (read the JSON file) every ~3s until status is 'ready' (or 'timeout'/'error'). When 'ready', run the teach-from-human skill on trajectoryPath (or bundleZip).",
+                }),
+              },
+            ],
           };
         }
       }

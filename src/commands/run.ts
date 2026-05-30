@@ -528,6 +528,7 @@ Rules:
 - Keep actions small and verify visible state after meaningful actions.
 - Do not edit host files, run host shell commands, or use non-mobile tools.
 - Keep durable app facts under agent-workspace/domain-skills if you discover reusable app behavior.
+- If you get GENUINELY stuck on a device step (two distinct approaches tried and re-observed, a knowledge gap — not a transient), call teach_request to have a human demonstrate it; poll the returned envelope until status is "ready", then synthesize a reusable domain-skill from the trajectory (the teach-from-human skill). Reach for this last, not first.
 - Final answer: concise outcome plus the evidence you observed.
 `;
 }

@@ -10,6 +10,7 @@ import { registerShimCommand } from "./commands/shim.js";
 import { registerRouteCommand } from "./commands/route.js";
 import { registerBillingCommand } from "./commands/billing.js";
 import { registerRunCommand } from "./commands/run.js";
+import { registerTeachCommand } from "./commands/teach.js";
 import { parseSettleMs } from "./action-wait.js";
 
 const program = new Command()
@@ -34,6 +35,7 @@ registerShimCommand(program);
 registerRouteCommand(program);
 registerBillingCommand(program);
 registerRunCommand(program);
+registerTeachCommand(program);
 
 program.option("--mcp", "run as MCP server (stdio)");
 

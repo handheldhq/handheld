@@ -25,9 +25,12 @@ workflow. The human acts through the live device viewer; the viewer records a
 skill runs the holotab teach-synthesis methodology over that bundle and writes
 a per-package domain-skill the agent replays — and verifies — on the next run.
 
-This skill does NOT capture the demonstration. Capture is the live viewer's job
-(`handheld teach` / the `teach_request` MCP tool opens the pre-armed viewer and
-returns a bundle path). This skill begins with a bundle already on disk.
+This skill does NOT capture the demonstration. Capture is the live viewer's job:
+`handheld teach <objective>` (or the `teach_request` MCP tool) opens the live
+viewer for the human and writes a teach **envelope** (`<workspace>/.handheld/teach/<id>/envelope.json`).
+The agent runs that in the background and **polls the envelope** until `status`
+is `ready`; the envelope's `trajectoryPath` (or `bundleZip`) is the bundle. This
+skill begins with that bundle on disk.
 
 ## When to use (the four gates — load-bearing)
 
@@ -60,9 +63,10 @@ raw **and** normalized coordinates), frame-metadata + PNG frames, an optional
 `transcript`, an `alignment[]` (action ↔ transcript), and a `skillDraft` slot
 the synthesis fills. Full field shapes: `references/trajectory-schema.md`.
 
-**Provenance guard.** Identify the exact bundle being synthesized (the one
-`teach_request` just returned, or an explicit path the user gave). Do not
-synthesize from fragments. If no bundle can be identified, refuse with:
+**Provenance guard.** Identify the exact bundle being synthesized (the
+`trajectoryPath` / `bundleZip` from the teach envelope once its `status` is
+`ready`, or an explicit path the user gave). Do not synthesize from fragments.
+If no bundle can be identified, refuse with:
 `No mobile-use.trajectory.v1 bundle found to synthesize. Run a teach recording first, or pass an explicit bundle path.`
 
 ## Synthesis workflow
