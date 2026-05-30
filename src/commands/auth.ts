@@ -94,14 +94,31 @@ async function postJson<T>(
   return data as T;
 }
 
+/**
+ * An already-available API key — from `HANDHELD_API_KEY` / `MOBILEUSE_API_KEY`
+ * env or saved config — or null. Unlike `requireApiKey` it never throws. Lets
+ * `init` skip the interactive browser sign-in when a key is already present.
+ */
+export function configuredApiKey(): string | null {
+  const envKey =
+    process.env.HANDHELD_API_KEY ?? process.env.MOBILEUSE_API_KEY ?? null;
+  if (envKey && envKey.trim()) return envKey.trim();
+  const saved = getConfig().apiKey;
+  return saved && saved.trim() ? saved.trim() : null;
+}
+
 async function reportDeviceCodeHandoff(input: {
   apiKey: string;
   apiUrl: string;
-  deviceCode: string;
+  deviceCode?: string;
   deviceId?: string;
   error?: string;
   status: HandoffStatus;
 }): Promise<void> {
+  // The handoff exists only to redirect the browser sign-in tab to the device's
+  // live view. With a pre-configured key there is no such tab — nothing to hand
+  // off — so skip it entirely.
+  if (!input.deviceCode) return;
   await postJson(
     input.apiUrl,
     "/cli/device-code/handoff",
@@ -310,7 +327,7 @@ async function ensureTrialDevice(
 async function prepareInitDevice(input: {
   apiKey: string;
   apiUrl: string;
-  deviceCode: string;
+  deviceCode?: string;
   json?: boolean;
   withAdb?: boolean;
 }): Promise<string | null> {
@@ -452,12 +469,33 @@ export function registerAuthCommands(program: Command): void {
       }) => {
         const json = program.opts().json;
         try {
-          const login = await loginWithDeviceCode({
-            apiUrl: opts.apiUrl,
-            intent: opts.device === false ? "login" : "init",
-            json,
-            open: opts.open,
-          });
+          // If a key is already available (env or saved config), skip the
+          // interactive browser sign-in and provision directly with it. This is
+          // the headless / CI / agent path: `HANDHELD_API_KEY=… handheld init`
+          // just creates a device, no CLI auth required.
+          const existingKey = configuredApiKey();
+          const login = existingKey
+            ? {
+                apiKey: existingKey,
+                apiUrl: resolveLoginApiUrl(opts.apiUrl),
+                deviceCode: "",
+              }
+            : await loginWithDeviceCode({
+                apiUrl: opts.apiUrl,
+                intent: opts.device === false ? "login" : "init",
+                json,
+                open: opts.open,
+              });
+          if (existingKey) {
+            // Persist the resolved key/url so later commands reuse them, and
+            // mirror what the device-code path prints on success.
+            setConfig({ apiKey: login.apiKey, apiUrl: login.apiUrl });
+            if (!json) {
+              console.log(
+                `Using configured API key (${login.apiKey.slice(0, 8)}…) — skipping browser sign-in.`
+              );
+            }
+          }
           let deviceId: string | null = null;
           let connection: Awaited<ReturnType<typeof connectDevice>> | null =
             null;
