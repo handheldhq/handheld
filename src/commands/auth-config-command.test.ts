@@ -7,15 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 describe("config command secret display", () => {
   let home: string;
   let originalHome: string | undefined;
+  let originalHandheldBin: string | undefined;
   let originalHandheldApiKey: string | undefined;
   let originalMobileUseApiKey: string | undefined;
 
   beforeEach(() => {
     originalHome = process.env.HOME;
+    originalHandheldBin = process.env.HANDHELD_BIN;
     originalHandheldApiKey = process.env.HANDHELD_API_KEY;
     originalMobileUseApiKey = process.env.MOBILEUSE_API_KEY;
     home = mkdtempSync(join(tmpdir(), "handheld-auth-config-test-"));
     process.env.HOME = home;
+    delete process.env.HANDHELD_BIN;
     delete process.env.HANDHELD_API_KEY;
     delete process.env.MOBILEUSE_API_KEY;
     vi.resetModules();
@@ -24,6 +27,8 @@ describe("config command secret display", () => {
   afterEach(() => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalHandheldBin === undefined) delete process.env.HANDHELD_BIN;
+    else process.env.HANDHELD_BIN = originalHandheldBin;
     if (originalHandheldApiKey === undefined) delete process.env.HANDHELD_API_KEY;
     else process.env.HANDHELD_API_KEY = originalHandheldApiKey;
     if (originalMobileUseApiKey === undefined) delete process.env.MOBILEUSE_API_KEY;
@@ -148,6 +153,7 @@ describe("config command secret display", () => {
       HANDHELD_PROJECT_AGENT_SPACE_DIR: join(project, "agent-space"),
       HANDHELD_RUN_AGENT_SPACE_DIR: join(project, "agent-space"),
     });
+    expect(mcp.mcpServers.handheld.command).toBe("handheld");
     expect(mcp.mcpServers.handheld.args).toContain("--mcp");
     expect(mcp.mcpServers.handheld.args).not.toContain("--device");
     expect(output).toContain(`Workspace: ${project}`);
@@ -178,10 +184,28 @@ describe("config command secret display", () => {
       HANDHELD_PROJECT_AGENT_SPACE_DIR: join(project, "agent-space"),
       HANDHELD_RUN_AGENT_SPACE_DIR: join(project, "agent-space"),
     });
+    expect(mcp.mcpServers.handheld.command).toBe("handheld");
     expect(mcp.mcpServers.handheld.args).toContain("--mcp");
     expect(mcp.mcpServers.handheld.args).not.toContain("--device");
     expect(output).toContain("Next: handheld connect --local");
     expect(output).toContain(`Agent space: ${join(project, "agent-space")}`);
+  });
+
+  it("lets HANDHELD_BIN override the durable project MCP command", async () => {
+    process.env.HANDHELD_BIN = "/tmp/handheld-dev";
+    const project = join(home, "bin-project");
+
+    await runAuth([
+      "init",
+      "--local",
+      "--no-connect",
+      "--workspace",
+      project,
+    ]);
+
+    const mcp = JSON.parse(readFileSync(join(project, ".handheld", "mcp.json"), "utf8"));
+    expect(mcp.mcpServers.handheld.command).toBe("/tmp/handheld-dev");
+    expect(mcp.mcpServers.handheld.args).toEqual(["--mcp"]);
   });
 
   it("can scaffold local init MCP args for a known adb serial without connecting", async () => {
@@ -198,6 +222,7 @@ describe("config command secret display", () => {
     ]);
 
     const mcp = JSON.parse(readFileSync(join(project, ".handheld", "mcp.json"), "utf8"));
+    expect(mcp.mcpServers.handheld.command).toBe("handheld");
     expect(mcp.mcpServers.handheld.args).toContain("--device");
     expect(mcp.mcpServers.handheld.args).toContain("emulator-5554");
   });

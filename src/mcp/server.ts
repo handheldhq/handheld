@@ -46,7 +46,7 @@ import {
   runAgentSpaceDirFromEnv,
   writeRunDomainSkill,
 } from "../agent-space.js";
-import { startTeachDetached } from "../commands/teach.js";
+import { readEnvelopeForTeachId, readTeachArtifactForTeachId, startTeachDetached } from "../commands/teach.js";
 import {
   beginActionWait,
   finishActionWait,
@@ -436,7 +436,7 @@ const TOOLS = [
   {
     name: "teach_request",
     description:
-      "Ask a human to DEMONSTRATE a device task you cannot do autonomously. Opens the live viewer in the human's browser to take over and record; returns immediately with an envelope path to POLL. Use only when genuinely stuck (see the teach-from-human skill's four gates). Non-blocking: poll the envelope until status is 'ready', then run the teach-from-human skill on the captured trajectory.",
+      "Ask a human to DEMONSTRATE a device task you cannot do autonomously. Opens the live viewer in the human's browser to take over and record; returns immediately with a teachId. Use only when genuinely stuck (see the teach-from-human skill's four gates). Non-blocking: poll teach_status until status is 'ready', then use the captured trajectory details.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -492,6 +492,34 @@ const TOOLS = [
           description: "Also capture and include a base64 PNG screenshot of the current screen.",
         },
       },
+    },
+  },
+  {
+    name: "teach_status",
+    description: "Poll a teach_request by teachId. Returns the teach envelope status and captured trajectory paths when ready.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        teachId: { type: "string", description: "Teach id returned by teach_request" },
+      },
+      required: ["teachId"],
+    },
+  },
+  {
+    name: "read_teach_artifact",
+    description:
+      "Read a teach_request envelope or captured trajectory JSON by teachId. Use this after teach_status reports ready when the agent is locked to MCP tools and cannot read host files directly.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        teachId: { type: "string", description: "Teach id returned by teach_request" },
+        artifact: {
+          type: "string",
+          enum: ["envelope", "trajectory"],
+          description: "Artifact to read. Defaults to trajectory.",
+        },
+      },
+      required: ["teachId"],
     },
   },
   {
@@ -991,6 +1019,8 @@ export const CORE_MCP_TOOL_NAMES = new Set([
   "recent",
   "shell",
   "teach_request",
+  "teach_status",
+  "read_teach_artifact",
 ]);
 
 const READ_ONLY_MCP_TOOL_NAMES = new Set([
@@ -1013,6 +1043,8 @@ const READ_ONLY_MCP_TOOL_NAMES = new Set([
   "list_apps",
   "current_app",
   "screenshot",
+  "teach_status",
+  "read_teach_artifact",
   "list_domain_skills",
   "read_domain_skill",
 ]);
@@ -2030,17 +2062,18 @@ function mcpListDomainSkills(): Record<string, unknown> {
   const roots = mcpAgentSpaceRoots();
   const runDomainSkillsDir = domainSkillsDir(roots.runAgentSpaceDir);
   const projectDomainSkillsDir = domainSkillsDir(roots.projectAgentSpaceDir);
+  const skillPaths = (root: string) => listDomainSkillFiles(root).map((skill) => skill.path);
   return {
     ok: true,
     project: {
       agentSpace: roots.projectAgentSpaceDir,
       domainSkillsDir: projectDomainSkillsDir,
-      skills: listDomainSkillFiles(projectDomainSkillsDir).map((skill) => skill.path),
+      skills: skillPaths(projectDomainSkillsDir),
     },
     run: {
       agentSpace: roots.runAgentSpaceDir,
       domainSkillsDir: runDomainSkillsDir,
-      skills: listDomainSkillFiles(runDomainSkillsDir).map((skill) => skill.path),
+      skills: skillPaths(runDomainSkillsDir),
     },
   };
 }
@@ -2096,6 +2129,21 @@ export function handleAgentSpaceToolCall(
     default:
       throw new Error(`Unsupported agent-space tool: ${name}`);
   }
+}
+
+export function handleTeachArtifactToolCall(
+  args: Record<string, unknown> | undefined,
+): ReturnType<typeof jsonContent> {
+  const artifact = optionalString(args, "artifact") ?? "trajectory";
+  if (artifact !== "envelope" && artifact !== "trajectory") {
+    throw new Error("artifact must be envelope or trajectory");
+  }
+  const teachId = requiredString(args, "teachId");
+  const result = readTeachArtifactForTeachId(teachId, artifact);
+  if (!result) {
+    throw new Error(`teach session not found: ${teachId}`);
+  }
+  return jsonContent({ ok: true, ...result });
 }
 
 function mcpDomainSkillScope(value: unknown): "project" | "run" {
@@ -2549,12 +2597,32 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
                   ...started,
                   status: "waiting",
                   instruction:
-                    "A live viewer is opening in the human's browser to demonstrate. This is non-blocking: poll envelopePath (read the JSON file) every ~3s until status is 'ready' (or 'timeout'/'error'). When 'ready', run the teach-from-human skill on trajectoryPath (or bundleZip).",
+                    "A live viewer is opening in the human's browser to demonstrate. This is non-blocking: call teach_status with teachId every ~3s until status is 'ready' (or 'timeout'/'error'). When 'ready', call read_teach_artifact with artifact='trajectory' and use that JSON with the teach-from-human skill.",
                 }),
               },
             ],
           };
         }
+
+        case "teach_status": {
+          const teachId = requiredString(args, "teachId");
+          const envelope = readEnvelopeForTeachId(teachId);
+          if (!envelope) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ ok: false, teachId, status: "missing" }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          return jsonContent({ ok: true, ...envelope });
+        }
+
+        case "read_teach_artifact":
+          return handleTeachArtifactToolCall(args);
 
         case "list_domain_skills":
         case "read_domain_skill":

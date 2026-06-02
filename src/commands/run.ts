@@ -555,14 +555,12 @@ const BASE_AGENT_ENV_KEYS = [
 
 const HANDHELD_AGENT_ENV_KEYS = [
   "HANDHELD_AGENT_SPACE",
-  "HANDHELD_API_KEY",
   "HANDHELD_API_URL",
   "HANDHELD_EVIDENCE_DIR",
   "HANDHELD_PROJECT_AGENT_SPACE_DIR",
   "HANDHELD_RUN_AGENT_SPACE_DIR",
   "HH_AGENT_SPACE",
   "HH_EVIDENCE_DIR",
-  "MOBILEUSE_API_KEY",
 ];
 
 const CLAUDE_PROVIDER_ENV_KEYS = [
@@ -828,7 +826,7 @@ Rules:
 - Do not edit host files, run host shell commands, or use non-mobile tools.
 - Use capture_evidence for important checkpoints and before your final answer; initial and final CLI snapshots are also recorded automatically in the run evidence directory.
 - Project domain skills are imported into this run's agent-space/skills/domain. Keep new app facts run-local first, then use domain-skill MCP tools to promote durable facts back to the project agent-space.
-- If you get GENUINELY stuck on a device step (two distinct approaches tried and re-observed, a knowledge gap — not a transient), call teach_request to have a human demonstrate it; poll the returned envelope until status is "ready", then synthesize a reusable domain-skill from the trajectory (the teach-from-human skill). Reach for this last, not first.
+- If you get GENUINELY stuck on a device step (two distinct approaches tried and re-observed, a knowledge gap — not a transient), call teach_request to have a human demonstrate it; poll teach_status with the returned teachId until status is "ready", then call read_teach_artifact with artifact="trajectory" and synthesize a reusable domain-skill from that JSON (the teach-from-human skill). Reach for this last, not first.
 - Final answer: concise outcome plus the evidence you observed.
 `;
 }

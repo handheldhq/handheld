@@ -20,10 +20,10 @@ npx handheld i
 ```
 
 `handheld i` opens a browser login when no API key is already available, starts a
-trial cloud phone when available, connects relay and ADB transports, starts the
-bundled Tiny helper when a device command path is available, redirects the
-approval tab to that phone's live device view, and scaffolds this project as a
-mobile agent space.
+trial cloud phone when available, connects the live relay/viewer by default
+(`--with-adb` also requests provider ADB), starts the bundled Tiny helper when a
+device command path is available, redirects the approval tab to that phone's
+live device view, and scaffolds this project as a mobile agent space.
 
 **Already have a key? `init` runs headlessly — no browser.**
 When `HANDHELD_API_KEY` is present, `handheld init` skips the browser sign-in
@@ -33,7 +33,7 @@ path:
 
 ```bash
 export HANDHELD_API_KEY=<your-api-key>
-handheld init                 # creates + connects a device + agent space, no CLI auth prompt
+handheld init                 # provisions/connects cloud + scaffolds agent-space, no browser auth prompt
 ```
 
 The saved global key is not per-device state. Workspace/project config can take
@@ -55,14 +55,17 @@ agent-space/
 Use `--workspace <path>` to scaffold a different project directory, or
 `--no-agent-space` for auth/device-only behavior (`--no-harness-workspace` is
 kept as a compatibility alias).
+Project `.handheld/mcp.json` uses the durable `handheld --mcp` command by
+default. Set `HANDHELD_BIN` during `init` if a project should point at a
+specific development binary instead.
 See [`docs/agent-space-naming.md`](docs/agent-space-naming.md) for the naming rationale and legacy compatibility rules.
 
 ## Profiles And Sessions
 
 ```bash
-handheld create                         # alias for init
+handheld create                         # provision a cloud phone with existing auth; no browser sign-in
 handheld devices                        # list Gateway profiles/devices
-handheld connect <profile-id>           # start/reuse a session when transports exist
+handheld connect <profile-id>           # attach to an existing profile/session target
 handheld status                         # check connection health
 handheld status --prune                 # remove stale saved connection records
 handheld doctor                         # secret-safe config/target/transport diagnostics
@@ -98,7 +101,8 @@ handheld disconnect                      # tears down locally; never calls the G
 `init --local` is the local first-run path: it creates `.handheld/`,
 `agent-space/`, MCP config, helpers, skills, and evidence directories without
 cloud auth; when it connects successfully, it saves that adb serial as the
-default device. `connect --local` is the attach-only sibling: it attaches over adb, bootstraps the Tiny helper on-device (the
+default device. Use `connect --local` when the workspace already exists and you
+only need to attach a device: it attaches over adb, bootstraps the Tiny helper on-device (the
 same path the [handheld-harness](https://github.com/) uses — they share one
 Tiny instance via a fixed token), and saves a relay-less connection marked
 `local`. Every control/observation command (`snap`, `tap`, `type`, `swipe`,
@@ -294,6 +298,9 @@ server injected through Codex config overrides. `ANTHROPIC_API_KEY` is stripped
 from Claude, and `OPENAI_API_KEY` / `CODEX_API_KEY` are stripped from Codex, so
 the local CLIs use the user's OAuth/keychain auth;
 pass `--allow-api-key-env` only when you intentionally want API-key auth.
+`HANDHELD_API_KEY` / `MOBILEUSE_API_KEY` are not passed into the spawned agent
+environment; `handheld init` persists the global account key for the MCP server
+fallback instead.
 Pass `--tui` to launch Claude Code's interactive terminal in the prepared
 workspace so you can steer the agent while it uses the same locked Handheld
 MCP server.
@@ -335,7 +342,10 @@ handheld --mcp --device <device-id>
 npx -y handheld --mcp
 ```
 
-Default agent tools: `devices`, `create_device`, `connect`, `disconnect`, `snap`, `capture_evidence`, `list_domain_skills`, `read_domain_skill`, `save_domain_skill_candidate`, `promote_domain_skill`, `tap`, `long_press`, `double_tap`, `swipe`, `type`, `list_apps`, `open_app`, `launch`, `copy`, `paste`, `press_key`, `back`, `home`, `recent`, `shell`, `teach_request`.
+Default agent tools: `devices`, `create_device`, `connect`, `disconnect`, `snap`, `capture_evidence`, `list_domain_skills`, `read_domain_skill`, `save_domain_skill_candidate`, `promote_domain_skill`, `tap`, `long_press`, `double_tap`, `swipe`, `type`, `list_apps`, `open_app`, `launch`, `copy`, `paste`, `press_key`, `back`, `home`, `recent`, `shell`, `teach_request`, `teach_status`, `read_teach_artifact`.
+When `teach_request` opens a human demonstration, locked MCP-only agents should
+poll `teach_status` by `teachId`, then call `read_teach_artifact` for the
+captured trajectory instead of reading host files directly.
 
 Set `HANDHELD_MCP_FULL=1` to expose advanced fleet/profile/billing and compatibility tools for operators.
 

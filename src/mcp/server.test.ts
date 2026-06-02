@@ -1,11 +1,18 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentSpaceDir, domainSkillsDir } from "../agent-space.js";
-import { CORE_MCP_TOOL_NAMES, handleAgentSpaceToolCall, listVisibleTools } from "./server.js";
+import {
+  CORE_MCP_TOOL_NAMES,
+  handleAgentSpaceToolCall,
+  handleTeachArtifactToolCall,
+  listVisibleTools,
+} from "./server.js";
 
 const tempDirs: string[] = [];
+const symlinkIt = process.platform === "win32" ? it.skip : it;
+const originalCwd = process.cwd();
 const originalAgentSpaceEnv = {
   HANDHELD_AGENT_SPACE: process.env.HANDHELD_AGENT_SPACE,
   HANDHELD_PROJECT_AGENT_SPACE_DIR: process.env.HANDHELD_PROJECT_AGENT_SPACE_DIR,
@@ -45,6 +52,7 @@ describe("MCP tool list", () => {
   const originalFull = process.env.HANDHELD_MCP_FULL;
 
   afterEach(() => {
+    process.chdir(originalCwd);
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { force: true, recursive: true });
     }
@@ -56,7 +64,7 @@ describe("MCP tool list", () => {
     restoreAgentSpaceEnv();
   });
 
-  it("exposes the documented core tools by default, including teach_request", () => {
+  it("exposes the documented core tools by default, including teach_request/status", () => {
     delete process.env.HANDHELD_MCP_FULL;
 
     const tools = listVisibleTools();
@@ -64,6 +72,8 @@ describe("MCP tool list", () => {
 
     expect(names).toEqual([...CORE_MCP_TOOL_NAMES]);
     expect(names).toContain("teach_request");
+    expect(names).toContain("teach_status");
+    expect(names).toContain("read_teach_artifact");
     expect(names).toContain("capture_evidence");
     expect(names).toContain("list_domain_skills");
     expect(names).toContain("read_domain_skill");
@@ -106,6 +116,14 @@ describe("MCP tool list", () => {
       destructiveHint: true,
       readOnlyHint: false,
     });
+    expect(byName.get("teach_status")?.annotations).toMatchObject({
+      destructiveHint: false,
+      readOnlyHint: true,
+    });
+    expect(byName.get("read_teach_artifact")?.annotations).toMatchObject({
+      destructiveHint: false,
+      readOnlyHint: true,
+    });
     expect(byName.get("click")?._meta?.["handheld/category"]).toBe("compatibility");
     expect(byName.get("profile_delete")?._meta?.["handheld/category"]).toBe("operator");
   });
@@ -117,6 +135,8 @@ describe("MCP tool list", () => {
     const runAgentSpace = agentSpaceDir(run);
     const projectDomain = domainSkillsDir(projectAgentSpace);
     mkdirSync(projectDomain, { recursive: true });
+    writeFileSync(join(projectDomain, "README.md"), "# Project domain readme\n");
+    writeFileSync(join(projectDomain, "_template.md"), "# Project domain template\n");
     writeFileSync(join(projectDomain, "com.project.md"), "# Project\n");
     process.env.HANDHELD_PROJECT_AGENT_SPACE_DIR = projectAgentSpace;
     process.env.HANDHELD_RUN_AGENT_SPACE_DIR = runAgentSpace;
@@ -169,5 +189,110 @@ describe("MCP tool list", () => {
       scope: "global",
     })).toThrow("scope must be run or project");
     expect(() => handleAgentSpaceToolCall("save_domain_skill_candidate", {})).toThrow("body is required");
+  });
+
+  it("reads teach envelopes and trajectories through MCP without host file access", () => {
+    const project = tempRoot();
+    process.chdir(project);
+    const teachDir = join(project, ".handheld", "teach", "teach-1");
+    const bundleDir = join(teachDir, "bundle");
+    mkdirSync(bundleDir, { recursive: true });
+    const trajectoryPath = join(bundleDir, "trajectory.json");
+    writeFileSync(trajectoryPath, JSON.stringify({ schema: "mobile-use.trajectory.v1", actions: [] }) + "\n");
+    writeFileSync(join(teachDir, "envelope.json"), JSON.stringify({
+      schema: "handheld.teach.envelope.v1",
+      teachId: "teach-1",
+      objective: "demo",
+      package: "com.example",
+      deviceId: "dev1",
+      viewerUrl: "https://viewer",
+      status: "ready",
+      createdAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+      dir: teachDir,
+      bundleZip: join(teachDir, "bundle.zip"),
+      bundleDir,
+      trajectoryPath,
+    }));
+
+    expect(jsonPayload(handleTeachArtifactToolCall({
+      artifact: "envelope",
+      teachId: "teach-1",
+    }))).toMatchObject({
+      artifact: "envelope",
+      ok: true,
+      teachId: "teach-1",
+    });
+    const trajectory = jsonPayload(handleTeachArtifactToolCall({
+      teachId: "teach-1",
+    }));
+    expect(trajectory).toMatchObject({
+      artifact: "trajectory",
+      ok: true,
+      teachId: "teach-1",
+    });
+    expect(JSON.parse(String(trajectory.content))).toMatchObject({
+      schema: "mobile-use.trajectory.v1",
+    });
+  });
+
+  it("refuses teach trajectory paths outside the teach session", () => {
+    const project = tempRoot();
+    const outside = tempRoot();
+    process.chdir(project);
+    const teachDir = join(project, ".handheld", "teach", "teach-1");
+    mkdirSync(teachDir, { recursive: true });
+    const outsideTrajectory = join(outside, "trajectory.json");
+    writeFileSync(outsideTrajectory, "{}\n");
+    writeFileSync(join(teachDir, "envelope.json"), JSON.stringify({
+      schema: "handheld.teach.envelope.v1",
+      teachId: "teach-1",
+      objective: "demo",
+      package: null,
+      deviceId: "dev1",
+      viewerUrl: "https://viewer",
+      status: "ready",
+      createdAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+      dir: teachDir,
+      bundleZip: null,
+      bundleDir: null,
+      trajectoryPath: outsideTrajectory,
+    }));
+
+    expect(() => handleTeachArtifactToolCall({
+      teachId: "teach-1",
+    })).toThrow("escapes teach session");
+  });
+
+  symlinkIt("refuses teach trajectories through session-local symlinks", () => {
+    const project = tempRoot();
+    const outside = tempRoot();
+    process.chdir(project);
+    const teachDir = join(project, ".handheld", "teach", "teach-1");
+    const bundleDir = join(teachDir, "bundle");
+    mkdirSync(bundleDir, { recursive: true });
+    const outsideTrajectory = join(outside, "trajectory.json");
+    writeFileSync(outsideTrajectory, "{}\n");
+    symlinkSync(outsideTrajectory, join(bundleDir, "trajectory.json"));
+    writeFileSync(join(teachDir, "envelope.json"), JSON.stringify({
+      schema: "handheld.teach.envelope.v1",
+      teachId: "teach-1",
+      objective: "demo",
+      package: null,
+      deviceId: "dev1",
+      viewerUrl: "https://viewer",
+      status: "ready",
+      createdAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+      dir: teachDir,
+      bundleZip: null,
+      bundleDir,
+      trajectoryPath: join(bundleDir, "trajectory.json"),
+    }));
+
+    expect(() => handleTeachArtifactToolCall({
+      teachId: "teach-1",
+    })).toThrow("escapes teach session");
   });
 });

@@ -14,16 +14,19 @@ import {
   buildTeachId,
   findTrajectoryBundle,
   ingestBundle,
+  readEnvelopeForTeachId,
   type TeachEnvelope,
 } from "./teach.js";
 
 const tmpDirs: string[] = [];
+const originalCwd = process.cwd();
 function tmp(): string {
   const d = mkdtempSync(join(tmpdir(), "teach-test-"));
   tmpDirs.push(d);
   return d;
 }
 afterEach(() => {
+  process.chdir(originalCwd);
   for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -31,6 +34,42 @@ describe("buildTeachId", () => {
   it("is a timestamp-slug-hex id derived from the objective", () => {
     const id = buildTeachId("Add a payee!!", new Date("2026-05-30T04:05:06.000Z"));
     expect(id).toMatch(/^20260530T040506Z-add-a-payee-[0-9a-f]{6}$/);
+  });
+});
+
+describe("readEnvelopeForTeachId", () => {
+  it("reads a project-local teach envelope by teachId", () => {
+    const project = tmp();
+    process.chdir(project);
+    const teachDir = join(project, ".handheld", "teach", "teach-1");
+    mkdirSync(teachDir, { recursive: true });
+    const env: TeachEnvelope = {
+      schema: "handheld.teach.envelope.v1",
+      teachId: "teach-1",
+      objective: "demo",
+      package: null,
+      deviceId: "dev1",
+      viewerUrl: "https://viewer",
+      status: "ready",
+      createdAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+      dir: teachDir,
+      bundleZip: join(teachDir, "bundle.zip"),
+      bundleDir: null,
+      trajectoryPath: null,
+    };
+    writeFileSync(join(teachDir, "envelope.json"), JSON.stringify(env));
+
+    expect(readEnvelopeForTeachId("teach-1")).toMatchObject({
+      objective: "demo",
+      status: "ready",
+      teachId: "teach-1",
+    });
+  });
+
+  it("does not accept path-like teach ids", () => {
+    expect(readEnvelopeForTeachId("../teach-1")).toBeNull();
+    expect(readEnvelopeForTeachId("nested/teach-1")).toBeNull();
   });
 });
 

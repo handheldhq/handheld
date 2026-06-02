@@ -99,7 +99,7 @@ export function createProjectHarnessWorkspace(input: {
         mcpServers: {
           handheld: {
             args: input.cliArgs ?? defaultMcpArgs(input.deviceId),
-            command: input.cliCommand ?? process.execPath,
+            command: input.cliCommand ?? defaultMcpCommand(),
             env: {
               HANDHELD_AGENT_SPACE: workspace.agentSpaceDir,
               HANDHELD_API_URL: input.apiUrl,
@@ -128,11 +128,14 @@ export function createProjectHarnessWorkspace(input: {
 }
 
 function defaultMcpArgs(deviceId?: string | null): string[] {
-  const cliPath = process.argv[1];
-  const args = cliPath ? [cliPath] : [];
+  const args: string[] = [];
   if (deviceId) args.push("--device", deviceId);
   args.push("--mcp");
   return args;
+}
+
+function defaultMcpCommand(): string {
+  return process.env.HANDHELD_BIN?.trim() || "handheld";
 }
 
 function renderAgentSpaceReadme(): string {
@@ -214,9 +217,9 @@ Do not store secrets or unredacted credentials.
 function renderAgentHelpersTemplate(): string {
   return `"""Editable Handheld harness helper shim.
 
-This file is loaded by handheld_harness.helpers when HANDHELD_AGENT_SPACE points
-at the agent-space directory. HH_AGENT_SPACE and HH_AGENT_WORKSPACE remain
-legacy fallbacks. It
+This file is loaded by handheld_harness.helpers when HANDHELD_RUN_AGENT_SPACE_DIR
+or HANDHELD_AGENT_SPACE points at the agent-space directory. HH_AGENT_SPACE and
+HH_AGENT_WORKSPACE remain legacy fallbacks. It
 imports the handheld-harness helper namespace, then leaves space for
 task-specific wrappers. It is not a second runtime: helpers still
 delegate to the handheld CLI/MCP boundary.
@@ -245,6 +248,7 @@ function renderProjectHandheldReadme(): string {
 Project-local Handheld agent-space metadata.
 
 - mcp.json points agents at the Handheld MCP server for this project.
+  By default it uses \`handheld --mcp\`; set HANDHELD_BIN during \`init\` to pin a development binary.
 - runs/ stores isolated handheld run workspaces.
 - ../agent-space/ stores editable helper shims, domain skills, interaction skills, and evidence.
 `;

@@ -12,6 +12,8 @@ android/tiny-snapshot-helper-v2-build/
 .handheld/
 .mu/
 .turbo/
+agent-space/evidence/*
+!agent-space/evidence/README.md
 
 # benchmarks / scratch
 bench-results/

@@ -36,9 +36,9 @@ phone unprompted (it uses trial quota / billing).
 
 ### A) Cloud phone — `handheld init`
 
-The product's onboarding. Claims a trial cloud phone, connects transports, opens
-the live viewer when available, and scaffolds this project as a mobile agent
-workspace.
+The product's onboarding. It may claim a trial cloud phone, starts or reuses a
+session, connects the live relay/viewer by default, opens the live viewer when available, and
+scaffolds this project as a mobile agent space.
 **How it authenticates depends on whether a key is already available:**
 
 - **You're an agent / headless / CI, and you HAVE a key** — set it in the
@@ -47,7 +47,7 @@ workspace.
 
   ```bash
   export HANDHELD_API_KEY=<key>
-  handheld init                     # "Using env API key — skipping browser sign-in." → device + workspace ready
+  handheld init                     # "Using env API key — skipping browser sign-in." -> device + agent space ready
   ```
 
 - **No key yet (interactive human at a terminal)** — `init` opens a browser login
@@ -59,23 +59,32 @@ workspace.
   ```
 
 After it returns, `handheld status` shows the connected device; `handheld devices`
-lists all profiles. (`handheld create` is the alias that only ever provisions with a
-configured key — `init` now covers that case too.)
+lists all profiles. `handheld create` is the headless cloud provisioner for an
+already-authenticated account; it never opens browser sign-in and does not
+replace the first-run project scaffold that `init` owns.
 It also creates `.handheld/mcp.json`, `.handheld/runs/`, and an editable
 `agent-space/` with `helpers/agent_helpers.py`, domain skills, mobile interaction
-skills, and evidence storage. Use `--no-harness-workspace` to skip that scaffold.
+skills, and evidence storage. Use `--no-agent-space` to skip that scaffold
+(`--no-harness-workspace` remains a legacy alias).
+The generated project MCP config uses `handheld --mcp` by default; set
+`HANDHELD_BIN` during `init` only when the project should pin a development
+binary.
 
-### B) Local device / emulator — `handheld connect --local`
+### B) Local device / emulator — `handheld init --local` or `handheld connect --local`
 
 Attaches directly over adb. **No Gateway, no session, no API key.** Use this for local
 dev, CI on an emulator, or a plugged-in phone.
 
 ```bash
-handheld connect --local                 # auto-pick the sole ready adb device
+handheld init --local                    # first-run local setup: attach + scaffold agent-space, no auth
+handheld init --local --no-connect       # scaffold only; no device touch
+handheld connect --local                 # attach-only: auto-pick the sole ready adb device
 handheld connect --local emulator-5554   # or name the serial (see `adb devices`)
 ```
 
-This bootstraps the Tiny helper over adb and saves a `local` connection. It shares one
+`init --local` scaffolds `.handheld/`, MCP config, helpers, skills, and evidence
+storage before optionally attaching. `connect --local` is the attach-only sibling:
+it bootstraps the Tiny helper over adb and saves a `local` connection. It shares one
 on-device Tiny with `handheld-harness` via a fixed token, so both tools can drive the
 same device at once.
 
@@ -87,7 +96,7 @@ Before dispatch, handheld verifies the cached snapshot still matches Tiny's live
 foreground/digest; stale cached targets fail closed with a re-snap hint.
 
 ```bash
-handheld snap                    # compact refs (@e1…) + readable text; add --screenshot for a PNG
+handheld snap                    # compact refs (@e1…) + readable text; add --screenshot for a JPEG file
 handheld tap @e2                 # tap a cached ref (or `handheld tap 540 960` for coordinates)
 handheld type "hello"            # set the focused field (Tiny setText; --append to append)
 handheld open-app settings       # launch an app by name/alias/package

@@ -27,10 +27,10 @@ a per-package domain-skill the agent replays — and verifies — on the next ru
 
 This skill does NOT capture the demonstration. Capture is the live viewer's job:
 `handheld teach <objective>` (or the `teach_request` MCP tool) opens the live
-viewer for the human and writes a teach **envelope** (`<workspace>/.handheld/teach/<id>/envelope.json`).
-The agent runs that in the background and **polls the envelope** until `status`
-is `ready`; the envelope's `trajectoryPath` (or `bundleZip`) is the bundle. This
-skill begins with that bundle on disk.
+viewer for the human and writes a teach envelope. MCP-only agents should poll
+`teach_status` until `status` is `ready`, then call `read_teach_artifact` with
+`artifact: "trajectory"` and synthesize from the returned JSON. When a human
+explicitly gives you a local bundle path, you may use that path instead.
 
 ## When to use (the four gates — load-bearing)
 
@@ -64,7 +64,7 @@ raw **and** normalized coordinates), frame-metadata + PNG frames, an optional
 the synthesis fills. Full field shapes: `references/trajectory-schema.md`.
 
 **Provenance guard.** Identify the exact bundle being synthesized (the
-`trajectoryPath` / `bundleZip` from the teach envelope once its `status` is
+trajectory JSON returned by `read_teach_artifact` once `teach_status` is
 `ready`, or an explicit path the user gave). Do not synthesize from fragments.
 If no bundle can be identified, refuse with:
 `No mobile-use.trajectory.v1 bundle found to synthesize. Run a teach recording first, or pass an explicit bundle path.`

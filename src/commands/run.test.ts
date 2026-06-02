@@ -71,6 +71,9 @@ describe("handheld run workspace", () => {
     expect(readFileSync(workspace.promptPath, "utf8")).toContain(
       "Start by observing the phone with snap",
     );
+    expect(readFileSync(workspace.promptPath, "utf8")).toContain(
+      'call read_teach_artifact with artifact="trajectory"',
+    );
     expect(
       existsSync(join(workspace.workspaceDir, "agent-space", "helpers", "agent_helpers.py")),
     ).toBe(false);
@@ -484,7 +487,7 @@ describe("Claude run plan", () => {
     expect(plan.path).toBe(join(workspace.evidencePath, "20260602T120000Z-final-state-snap.json"));
   });
 
-  it("strips provider API-key env by default but can preserve it explicitly", () => {
+  it("strips provider and handheld API-key env by default but can preserve provider keys explicitly", () => {
     const env = buildAgentEnv(
       {
         ANTHROPIC_API_KEY: "secret",
@@ -492,6 +495,7 @@ describe("Claude run plan", () => {
         CLAUDE_CODE_USE_BEDROCK: "1",
         HANDHELD_API_KEY: "hk_env",
         HANDHELD_RUN_AGENT_SPACE_DIR: "/tmp/run-agent-space",
+        MOBILEUSE_API_KEY: "legacy_hk_env",
         PATH: "/bin",
         SECRET_TOKEN: "secret-token",
       },
@@ -501,7 +505,8 @@ describe("Claude run plan", () => {
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(env.SECRET_TOKEN).toBeUndefined();
-    expect(env.HANDHELD_API_KEY).toBe("hk_env");
+    expect(env.HANDHELD_API_KEY).toBeUndefined();
+    expect(env.MOBILEUSE_API_KEY).toBeUndefined();
     expect(env.HANDHELD_RUN_AGENT_SPACE_DIR).toBe("/tmp/run-agent-space");
     expect(env.PATH).toBe("/bin");
 

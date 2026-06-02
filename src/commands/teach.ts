@@ -3,14 +3,16 @@ import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Command } from "commander";
 import { connectDevice } from "./connect.js";
@@ -37,6 +39,16 @@ export interface TeachEnvelope {
   bundleZip: string | null;
   bundleDir: string | null;
   trajectoryPath: string | null;
+}
+
+export type TeachArtifactKind = "envelope" | "trajectory";
+
+export interface TeachArtifact {
+  artifact: TeachArtifactKind;
+  content: string;
+  envelope: TeachEnvelope;
+  path: string;
+  teachId: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -135,8 +147,8 @@ export function ingestBundle(input: {
     bundleDir,
     trajectoryPath,
     message: trajectoryPath
-      ? "Demonstration captured. Run the teach-from-human skill on trajectoryPath."
-      : "Bundle captured (extract failed — point the skill at bundleZip).",
+      ? "Demonstration captured. MCP-only agents can call read_teach_artifact with artifact=trajectory."
+      : "Bundle captured (extract failed; use teach_status for metadata and rerun capture if trajectory JSON is required).",
   };
   writeEnvelope(input.envelopePath, next);
   return next;
@@ -275,8 +287,8 @@ export async function runTeach(
 
 /**
  * Start a teach session detached (for the agent / MCP path): pre-create the dir +
- * envelope, spawn `handheld teach` in the background, and return the envelope info
- * the caller polls. The caller reads envelopePath until status !== "waiting".
+ * envelope, spawn `handheld teach` in the background, and return the teach id
+ * the MCP caller polls through teach_status.
  */
 export function startTeachDetached(input: {
   objective: string;
@@ -327,6 +339,114 @@ export function readEnvelope(envelopePath: string): TeachEnvelope | null {
     return JSON.parse(readFileSync(envelopePath, "utf-8")) as TeachEnvelope;
   } catch {
     return null;
+  }
+}
+
+export function readEnvelopeForTeachId(teachId: string): TeachEnvelope | null {
+  const safeTeachId = normalizeTeachId(teachId);
+  if (!safeTeachId) return null;
+  const envelopePath = assertTeachPathInside(
+    getProjectTeachDir(),
+    join(safeTeachId, "envelope.json"),
+    "envelopePath",
+  );
+  return readEnvelope(envelopePath);
+}
+
+export function readTeachArtifactForTeachId(
+  teachId: string,
+  artifact: TeachArtifactKind = "trajectory"
+): TeachArtifact | null {
+  const safeTeachId = normalizeTeachId(teachId);
+  if (!safeTeachId) return null;
+  const teachRoot = getProjectTeachDir();
+  const dir = join(teachRoot, safeTeachId);
+  const envelopePath = assertTeachPathInside(teachRoot, join(safeTeachId, "envelope.json"), "envelopePath");
+  const envelope = readEnvelope(envelopePath);
+  if (!envelope) return null;
+
+  if (artifact === "envelope") {
+    return {
+      artifact,
+      content: JSON.stringify(envelope, null, 2) + "\n",
+      envelope,
+      path: envelopePath,
+      teachId: safeTeachId,
+    };
+  }
+
+  if (artifact !== "trajectory") {
+    throw new Error("artifact must be envelope or trajectory");
+  }
+  if (envelope.status !== "ready") {
+    throw new Error(`teach session ${safeTeachId} is not ready (status: ${envelope.status})`);
+  }
+  if (!envelope.trajectoryPath) {
+    throw new Error(
+      `teach session ${safeTeachId} has no trajectoryPath; bundleZip: ${envelope.bundleZip ?? "none"}`
+    );
+  }
+  const trajectoryPath = assertTeachPathInside(dir, envelope.trajectoryPath, "trajectoryPath");
+  return {
+    artifact,
+    content: readFileSync(trajectoryPath, "utf-8"),
+    envelope,
+    path: trajectoryPath,
+    teachId: safeTeachId,
+  };
+}
+
+function normalizeTeachId(teachId: string): string | null {
+  const safeTeachId = teachId.trim();
+  if (!safeTeachId || safeTeachId.includes("/") || safeTeachId.includes("\\")) {
+    return null;
+  }
+  return safeTeachId;
+}
+
+function assertTeachPathInside(rootDir: string, path: string, label: string): string {
+  const root = resolve(rootDir);
+  const resolved = resolve(root, path);
+  const rel = relative(root, resolved);
+  const lexicallyInside = rel === "" || (!rel.startsWith("..") && !rel.split(sep).includes(".."));
+  if (lexicallyInside) {
+    assertNoTeachSymlinkComponents(root, resolved, label);
+  }
+  if (existsSync(root) && existsSync(resolved)) {
+    const realRoot = realpathSync(root);
+    const realPath = realpathSync(resolved);
+    const realRel = relative(realRoot, realPath);
+    if (realRel.startsWith("..") || realRel.split(sep).includes("..")) {
+      throw new Error(`${label} escapes teach session: ${path}`);
+    }
+    return resolved;
+  }
+  if (!lexicallyInside) {
+    throw new Error(`${label} escapes teach session: ${path}`);
+  }
+  return resolved;
+}
+
+function assertNoTeachSymlinkComponents(root: string, absolutePath: string, label: string): void {
+  try {
+    if (lstatSync(root).isSymbolicLink()) {
+      throw new Error(`${label} uses a symlink: ${root}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const parts = relative(root, absolutePath).split(sep).filter(Boolean);
+  let current = root;
+  for (const part of parts) {
+    current = join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        throw new Error(`${label} uses a symlink: ${relative(root, current)}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
   }
 }
 
