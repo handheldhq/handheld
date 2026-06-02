@@ -103,7 +103,8 @@ export type ConfiguredApiAuth = {
 /**
  * An already-available API key, from env first or legacy saved config, or null.
  * Unlike requireApiKey it never throws. Lets init skip browser sign-in without
- * copying env-sourced secrets into config.json.
+ * opening a browser. Env-sourced account keys are then persisted as the
+ * user's global fallback config key.
  */
 export function configuredApiAuth(): ConfiguredApiAuth | null {
   const envKey =
@@ -530,13 +531,13 @@ Arg grammar:
 
 Examples:
   handheld init                              # browser sign-in, claim a trial phone, connect it
-  HANDHELD_API_KEY=hk_... handheld init      # agent/CI path: no browser, no stored key
+  HANDHELD_API_KEY=hk_... handheld init      # agent/CI path: no browser; stores the global key
   handheld init --with-adb                   # also bring up the ADB transport, not just relay
   handheld init --no-device                  # just sign in and store the key
 
 Caveats:
-  - With HANDHELD_API_KEY present it skips the browser entirely and does not copy the key into config.json.
-  - Saved config keys still work for backward compatibility and local convenience.
+  - With HANDHELD_API_KEY present it skips the browser entirely and saves that account key in ~/.handheld/config.json.
+  - Saved config keys remain the global fallback; workspace/project config can override later when present.
   - Without a key it opens a browser device-code flow; use --no-open on a headless host.
   - Claims a TRIAL cloud phone and sets it as default-device, so later bare \`connect\`/\`run\` target it.
   - For a LOCAL adb device you don't need init at all — just \`handheld connect --local\`.`
@@ -552,10 +553,9 @@ Caveats:
       }) => {
         const json = program.opts().json;
         try {
-          // If a key is already available (env or saved config), skip the
-          // interactive browser sign-in and provision directly with it. This is
-          // the headless / CI / agent path: `HANDHELD_API_KEY=… handheld init`
-          // just creates a device, no CLI auth required.
+          // If a key is already available (env or saved config), skip browser
+          // sign-in and provision directly. Env auth bootstraps the global
+          // account key, so persist it once in ~/.handheld/config.json.
           const existingAuth = configuredApiAuth();
           const login = existingAuth
             ? {
@@ -570,12 +570,7 @@ Caveats:
                 open: opts.open,
               });
           if (existingAuth) {
-            // Env-sourced auth is intentionally transient. Saved config remains
-            // supported for legacy/local use, but env secrets do not get copied
-            // into config.json.
-            if (existingAuth.source === "config") {
-              setConfig({ apiKey: login.apiKey, apiUrl: login.apiUrl });
-            }
+            setConfig({ apiKey: login.apiKey, apiUrl: login.apiUrl });
             if (!json) {
               console.log(
                 `Using ${existingAuth.source === "env" ? "env API key" : "configured API key"} (${login.apiKey.slice(0, 8)}…) — skipping browser sign-in.`

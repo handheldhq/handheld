@@ -1,5 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
-import { basename } from "node:path";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -115,6 +115,9 @@ type McpTool = {
   annotations?: ToolAnnotations;
   _meta?: Record<string, unknown>;
 };
+
+const MCP_EVIDENCE_DIR_MODE = 0o700;
+const MCP_EVIDENCE_FILE_MODE = 0o600;
 
 const TOOLS = [
   {
@@ -836,6 +839,18 @@ const TOOLS = [
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
+    name: "capture_evidence",
+    description:
+      "Capture durable evidence for this run: snapshot/status JSON plus an optional screenshot file in HANDHELD_EVIDENCE_DIR.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        label: { type: "string", description: "Short label for the evidence files, e.g. initial, login-form, final" },
+        screenshot: { type: "boolean", description: "Write a screenshot image too (default true)" },
+      },
+    },
+  },
+  {
     name: "shell",
     description: "Execute a shell command on the device",
     inputSchema: {
@@ -903,6 +918,7 @@ export const CORE_MCP_TOOL_NAMES = new Set([
   "connect",
   "disconnect",
   "snap",
+  "capture_evidence",
   "tap",
   "long_press",
   "double_tap",
@@ -1937,6 +1953,123 @@ async function readMcpSnapshotRaw(input: {
   });
 }
 
+function mcpEvidenceRoot(): string {
+  const configured = process.env.HANDHELD_EVIDENCE_DIR?.trim();
+  return resolve(configured || join(process.cwd(), "evidence"));
+}
+
+function mcpEvidenceSlug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "state";
+}
+
+function mcpEvidencePrefix(label: string, now = new Date()): string {
+  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  return `${stamp}-${mcpEvidenceSlug(label).slice(0, 48)}`;
+}
+
+function writeMcpEvidenceJson(path: string, value: unknown): void {
+  writeFileSync(path, JSON.stringify(value, null, 2) + "\n", {
+    mode: MCP_EVIDENCE_FILE_MODE,
+  });
+}
+
+async function readMcpSnapshotDocument(input: {
+  adb: AdbTransport | null;
+  conn: Connection;
+  relay: RelayClient | null;
+}): Promise<SnapshotDocument> {
+  const raw = await readMcpSnapshotRaw({
+    adb: input.adb,
+    api: () => new HandheldApiClient(),
+    conn: input.conn,
+    relay: input.relay,
+  });
+  let snapshot: SnapshotDocument;
+  try {
+    snapshot = normalizeTinySnapshot({ deviceId: input.conn.deviceId, raw });
+  } catch (error) {
+    clearLastSnapshot(input.conn.deviceId);
+    throw error;
+  }
+  // Current Tiny folds the foreground activity into the snapshot itself
+  // (on-device); only fall back to a host dumpsys for an older Tiny.
+  if (!snapshot.activity) {
+    try {
+      const focus = await runMcpShell(input.relay, input.adb, currentAppCommand());
+      if (focus.ok && typeof focus.data === "string") {
+        const current = parseCurrentComponent(focus.data);
+        if (current.activity) snapshot.activity = current.activity;
+        if (current.component) snapshot.component = current.component;
+      }
+    } catch {
+      // best-effort
+    }
+  }
+  saveLastSnapshot(snapshot);
+  return snapshot;
+}
+
+async function captureMcpEvidence(input: {
+  adb: AdbTransport | null;
+  conn: Connection;
+  includeScreenshot: boolean;
+  label: string;
+  relay: RelayClient | null;
+}): Promise<Record<string, unknown>> {
+  const root = mcpEvidenceRoot();
+  mkdirSync(root, { mode: MCP_EVIDENCE_DIR_MODE, recursive: true });
+  const prefix = mcpEvidencePrefix(input.label);
+  const snapshotPath = join(root, `${prefix}-snap.json`);
+  const statusPath = join(root, `${prefix}-status.json`);
+  const screenPath = join(root, `${prefix}-screen.png`);
+
+  const snapshot = await readMcpSnapshotDocument(input);
+  writeMcpEvidenceJson(snapshotPath, {
+    ...snapshot,
+    nodes: snapshotNodesForDisplay(snapshot, { interactive: false }),
+    raw: undefined,
+    totalNodeCount: snapshot.nodes.length,
+  });
+
+  const status: Record<string, unknown> = {
+    deviceId: input.conn.deviceId,
+    evidenceDir: root,
+    label: input.label,
+    ok: true,
+    snapshot: snapshotPath,
+    status: statusPath,
+  };
+  try {
+    const current = await runMcpShell(input.relay, input.adb, currentAppCommand());
+    if (current.ok && typeof current.data === "string") {
+      status.currentApp = parseCurrentComponent(current.data);
+    } else {
+      status.currentAppError = current.error ?? "current_app failed";
+    }
+  } catch (error) {
+    status.currentAppError = error instanceof Error ? error.message : String(error);
+  }
+  if (input.includeScreenshot) {
+    const screenshot = await runWithAdbFallback("screenshot", input.relay, input.adb, (transport) =>
+      transport.screenshot()
+    );
+    if (screenshot.ok && "base64" in screenshot && screenshot.base64) {
+      writeFileSync(screenPath, Buffer.from(screenshot.base64, "base64"), {
+        mode: MCP_EVIDENCE_FILE_MODE,
+      });
+      status.screenshot = screenPath;
+      status.screenshotMimeType = "image/png";
+    } else {
+      status.screenshotError = "error" in screenshot ? screenshot.error : "Screenshot failed";
+    }
+  }
+  writeMcpEvidenceJson(statusPath, status);
+  return status;
+}
+
 function requireOk(result: McpTransportResult, label: string): void {
   if (!result.ok) throw new Error(`${label}: ${result.error ?? "unknown error"}`);
 }
@@ -2283,34 +2416,11 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
       switch (name) {
         case "snap": {
           if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
-          const raw = await readMcpSnapshotRaw({
+          const snapshot = await readMcpSnapshotDocument({
             adb,
-            api: () => new HandheldApiClient(),
             conn,
             relay,
           });
-          let snapshot;
-          try {
-            snapshot = normalizeTinySnapshot({ deviceId: conn.deviceId, raw });
-          } catch (error) {
-            clearLastSnapshot(conn.deviceId);
-            throw error;
-          }
-          // Current Tiny folds the foreground activity into the snapshot itself
-          // (on-device); only fall back to a host dumpsys for an older Tiny.
-          if (!snapshot.activity) {
-            try {
-              const focus = await runMcpShell(relay, adb, currentAppCommand());
-              if (focus.ok && typeof focus.data === "string") {
-                const current = parseCurrentComponent(focus.data);
-                if (current.activity) snapshot.activity = current.activity;
-                if (current.component) snapshot.component = current.component;
-              }
-            } catch {
-              // best-effort
-            }
-          }
-          saveLastSnapshot(snapshot);
           if (args?.agent === true) {
             return jsonContent(snapshotForAgent(snapshot));
           }
@@ -2339,6 +2449,19 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
                 : undefined,
             totalNodeCount: snapshot.nodes.length,
           });
+        }
+
+        case "capture_evidence": {
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
+          return jsonContent(
+            await captureMcpEvidence({
+              adb,
+              conn,
+              includeScreenshot: args?.screenshot !== false,
+              label: optionalString(args, "label") ?? "state",
+              relay,
+            })
+          );
         }
 
         case "tap":

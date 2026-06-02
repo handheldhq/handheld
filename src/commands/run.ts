@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -98,6 +98,7 @@ export type HandheldMcpServerConfig = {
   command: string;
   env: {
     HANDHELD_API_URL: string;
+    HANDHELD_EVIDENCE_DIR: string;
   };
 };
 
@@ -105,6 +106,20 @@ export type TinyWarmupPlan = {
   args: string[];
   command: string;
   logPath: string;
+};
+
+export type RunEvidenceCapturePlan = {
+  args: string[];
+  command: string;
+  label: string;
+  path: string;
+};
+
+export type RunEvidenceCapture = RunEvidenceCapturePlan & {
+  ok: boolean;
+  error?: string;
+  signal?: NodeJS.Signals | null;
+  status?: number | null;
 };
 
 export function registerRunCommand(program: Command): void {
@@ -245,6 +260,15 @@ export async function runLocalAgent(
       workspace,
     });
   }
+  const evidenceCaptures: RunEvidenceCapture[] = [];
+  if (!options.dryRun) {
+    evidenceCaptures.push(captureRunEvidence({
+      apiUrl,
+      deviceId,
+      label: "initial",
+      workspace,
+    }));
+  }
 
   const plan = buildAgentRunPlan({
     agent,
@@ -275,6 +299,13 @@ export async function runLocalAgent(
     cwd: workspace.workspaceDir,
     interactive,
     json: rootOptions.json === true,
+  }).finally(() => {
+    evidenceCaptures.push(captureRunEvidence({
+      apiUrl,
+      deviceId,
+      label: "final",
+      workspace,
+    }));
   });
 
   if (rootOptions.json) {
@@ -286,6 +317,7 @@ export async function runLocalAgent(
           signal: result.signal,
           stdout: result.stdout,
           stderr: result.stderr,
+          evidenceCaptures,
           tinyWarmup,
           workspace: workspace.workspaceDir,
           deviceId,
@@ -333,6 +365,7 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
     command: input.cliCommand ?? defaultMcpCommand(),
     env: {
       HANDHELD_API_URL: input.apiUrl,
+      HANDHELD_EVIDENCE_DIR: evidenceDir,
     },
   };
   const mcpConfig = {
@@ -446,6 +479,8 @@ export function buildCodexRunPlan(input: AgentRunInput): AgentRunPlan {
     `mcp_servers.handheld.args=${tomlStringArray(input.mcpServer.args)}`,
     "-c",
     `mcp_servers.handheld.env.HANDHELD_API_URL=${tomlString(input.apiUrl)}`,
+    "-c",
+    `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR=${tomlString(input.mcpServer.env.HANDHELD_EVIDENCE_DIR)}`,
   ];
   if (input.model?.trim()) {
     args.push("-m", input.model.trim());
@@ -538,6 +573,82 @@ export function buildTinyWarmupPlan(input: {
     command: defaultMcpCommand(),
     logPath: join(input.workspace.workspaceDir, "logs", "tiny-bootstrap.log"),
   };
+}
+
+export function buildRunEvidenceCapturePlan(input: {
+  deviceId: string;
+  label: string;
+  now?: Date;
+  workspace: RunWorkspace;
+}): RunEvidenceCapturePlan {
+  const stamp = (input.now ?? new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const label = slugify(input.label).slice(0, 48) || "state";
+  return {
+    args: [
+      ...defaultCliArgs(input.deviceId),
+      "--json",
+      "snap",
+      "--screenshot",
+    ],
+    command: defaultMcpCommand(),
+    label: input.label,
+    path: join(input.workspace.evidencePath, `${stamp}-${label}-snap.json`),
+  };
+}
+
+export function captureRunEvidence(input: {
+  apiUrl: string;
+  deviceId: string;
+  label: string;
+  workspace: RunWorkspace;
+}): RunEvidenceCapture {
+  const plan = buildRunEvidenceCapturePlan(input);
+  try {
+    const result = spawnSync(plan.command, plan.args, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HANDHELD_API_URL: input.apiUrl,
+      },
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 60_000,
+    });
+    if (result.status === 0 && result.stdout.trim()) {
+      writePrivateFile(plan.path, result.stdout);
+      return { ...plan, ok: true, signal: result.signal, status: result.status };
+    }
+    const error = result.error?.message || result.stderr.trim() || "Evidence capture returned no snapshot";
+    writePrivateFile(
+      plan.path,
+      JSON.stringify(
+        {
+          args: plan.args,
+          command: plan.command,
+          error,
+          label: input.label,
+          ok: false,
+          signal: result.signal,
+          status: result.status,
+          stderr: result.stderr,
+          stdout: result.stdout,
+        },
+        null,
+        2,
+      ),
+    );
+    return { ...plan, error, ok: false, signal: result.signal, status: result.status };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      writePrivateFile(
+        plan.path,
+        JSON.stringify({ args: plan.args, command: plan.command, error: message, label: input.label, ok: false }, null, 2),
+      );
+    } catch {
+      // Best-effort evidence must never make a run fail.
+    }
+    return { ...plan, error: message, ok: false };
+  }
 }
 
 function startTinyWarmup(input: {
@@ -636,6 +747,7 @@ Rules:
 - ${reconnectInstruction}
 - Keep actions small and verify visible state after meaningful actions.
 - Do not edit host files, run host shell commands, or use non-mobile tools.
+- Use capture_evidence for important checkpoints and before your final answer; initial and final CLI snapshots are also recorded automatically in the run evidence directory.
 - Keep durable app facts under agent-workspace/domain-skills if you discover reusable app behavior.
 - If you get GENUINELY stuck on a device step (two distinct approaches tried and re-observed, a knowledge gap — not a transient), call teach_request to have a human demonstrate it; poll the returned envelope until status is "ready", then synthesize a reusable domain-skill from the trajectory (the teach-from-human skill). Reach for this last, not first.
 - Final answer: concise outcome plus the evidence you observed.
@@ -651,6 +763,7 @@ This workspace is intentionally isolated for one local agent run.
 - Use only the handheld MCP tools exposed by mcp.json.
 - Do not rely on global Claude settings, project settings, hooks, or non-mobile tools.
 - Tiny helper bootstrap starts in the background when the run connects.
+- capture_evidence writes durable snapshots/status/screenshots into evidence/.
 - agent-workspace/ is the only place for run-local helper notes.
 - agent-workspace/domain-skills/ is for durable app facts: selectors, waits, traps, and verification checks.
 `;

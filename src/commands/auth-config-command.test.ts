@@ -47,6 +47,20 @@ describe("config command secret display", () => {
     return output.join("\n");
   }
 
+  async function runAuth(args: string[]): Promise<string> {
+    const output: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
+      output.push(parts.join(" "));
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const { registerAuthCommands } = await import("./auth.js");
+    const program = new Command().name("handheld").exitOverride();
+    registerAuthCommands(program);
+    await program.parseAsync(args, { from: "user" });
+    return output.join("\n");
+  }
+
   it("masks config get api-key", async () => {
     const fullKey = "muk_secret_value_123456";
     const state = await import("../state.js");
@@ -93,6 +107,18 @@ describe("config command secret display", () => {
       source: "env",
     });
     expect(auth.configuredApiKey()).toBe("muk_env_value");
+  });
+
+  it("persists env auth as the global init fallback key", async () => {
+    process.env.HANDHELD_API_KEY = "muk_env_bootstrap";
+
+    await runAuth(["init", "--no-device", "--api-url", "https://api.test"]);
+
+    const state = await import("../state.js");
+    expect(state.getConfig()).toMatchObject({
+      apiKey: "muk_env_bootstrap",
+      apiUrl: "https://api.test",
+    });
   });
 
   it("points missing cloud auth at env-first setup", async () => {

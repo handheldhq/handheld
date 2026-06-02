@@ -41,7 +41,7 @@ The product's onboarding. Claims a trial cloud phone and connects transports.
 
 - **You're an agent / headless / CI, and you HAVE a key** — set it in the
   environment; `init` then skips the browser entirely and provisions directly.
-  No human, no browser, no stored local key:
+  No human, no browser; it saves the global account key for later fallback:
 
   ```bash
   export HANDHELD_API_KEY=<key>

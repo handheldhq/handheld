@@ -7,6 +7,7 @@ import {
   buildAgentEnv,
   buildCodexRunPlan,
   buildClaudeRunPlan,
+  buildRunEvidenceCapturePlan,
   buildTinyWarmupPlan,
   createRunWorkspace,
   registerRunCommand,
@@ -49,7 +50,10 @@ describe("handheld run workspace", () => {
         handheld: {
           args: ["handheld", "--device", "dev_123", "--mcp"],
           command: "node",
-          env: { HANDHELD_API_URL: "https://api.test" },
+          env: {
+            HANDHELD_API_URL: "https://api.test",
+            HANDHELD_EVIDENCE_DIR: workspace.evidencePath,
+          },
         },
       },
     });
@@ -132,6 +136,9 @@ describe("handheld run workspace", () => {
     expect(prepared.evidence).toBe(join(workspaceDir, "evidence"));
     expect(prepared.connected).toBeNull();
     expect(prepared.args).toContain('mcp_servers.handheld.env.HANDHELD_API_URL=""');
+    expect(prepared.args).toContain(
+      `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR="${workspaceDir}/evidence"`,
+    );
     expect(
       prepared.args.find((arg: string) => arg.startsWith("mcp_servers.handheld.args=")),
     ).toContain("emulator-5554");
@@ -320,6 +327,8 @@ describe("Claude run plan", () => {
       'mcp_servers.handheld.args=["handheld", "--device", "dev_123", "--mcp"]',
       "-c",
       'mcp_servers.handheld.env.HANDHELD_API_URL="https://api.test"',
+      "-c",
+      `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR="${workspace.evidencePath}"`,
       "-m",
       "gpt-5",
       "-",
@@ -346,6 +355,29 @@ describe("Claude run plan", () => {
     expect(plan.args).toContain("--device");
     expect(plan.args).toContain("dev_123");
     expect(plan.logPath).toBe(join(workspace.workspaceDir, "logs", "tiny-bootstrap.log"));
+  });
+
+  it("builds best-effort first/final evidence capture commands", () => {
+    const workspace = createRunWorkspace({
+      apiUrl: "https://api.test",
+      cliArgs: ["handheld", "--device", "dev_123", "--mcp"],
+      cliCommand: "node",
+      deviceId: "dev_123",
+      runsDir: tempRoot(),
+      task: "Observe",
+    });
+    const plan = buildRunEvidenceCapturePlan({
+      deviceId: "dev_123",
+      label: "final state",
+      now: new Date("2026-06-02T12:00:00Z"),
+      workspace,
+    });
+
+    expect(plan.command).toBe(process.execPath);
+    expect(plan.args.slice(-3)).toEqual(["--json", "snap", "--screenshot"]);
+    expect(plan.args).toContain("--device");
+    expect(plan.args).toContain("dev_123");
+    expect(plan.path).toBe(join(workspace.evidencePath, "20260602T120000Z-final-state-snap.json"));
   });
 
   it("strips provider API-key env by default but can preserve it explicitly", () => {

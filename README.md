@@ -24,9 +24,10 @@ trial cloud phone when available, connects relay and ADB transports, starts the
 bundled Tiny helper when a device command path is available, and redirects the
 approval tab to that phone's live device view.
 
-**Already have a key? `init` runs headlessly — no browser and no stored key.**
+**Already have a key? `init` runs headlessly — no browser.**
 When `HANDHELD_API_KEY` is present, `handheld init` skips the browser sign-in
-and provisions the trial phone directly with that key. This is the CI / agent
+and provisions the trial phone directly with that key, then saves it as the
+global account fallback in `~/.handheld/config.json`. This is the CI / agent
 path:
 
 ```bash
@@ -34,9 +35,8 @@ export HANDHELD_API_KEY=<your-api-key>
 handheld init                 # creates + connects a device, no CLI auth prompt
 ```
 
-Saved config keys from `handheld login` or `handheld config set api-key` still
-work for backward compatibility, but agents should prefer the env var so secrets
-do not need to be written to disk.
+The saved global key is not per-device state. Workspace/project config can take
+precedence later when present.
 
 ## Profiles And Sessions
 

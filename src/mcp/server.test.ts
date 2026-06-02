@@ -20,6 +20,7 @@ describe("MCP tool list", () => {
 
     expect(names).toEqual([...CORE_MCP_TOOL_NAMES]);
     expect(names).toContain("teach_request");
+    expect(names).toContain("capture_evidence");
     expect(names).not.toContain("click");
     expect(names).not.toContain("profile_delete");
     expect(tools.every((tool) => tool._meta?.["handheld/category"] === "core")).toBe(true);
@@ -35,6 +36,10 @@ describe("MCP tool list", () => {
       idempotentHint: true,
       openWorldHint: true,
       readOnlyHint: true,
+    });
+    expect(byName.get("capture_evidence")?.annotations).toMatchObject({
+      destructiveHint: false,
+      readOnlyHint: false,
     });
     expect(byName.get("tap")?.annotations).toMatchObject({
       destructiveHint: false,
