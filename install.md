@@ -36,7 +36,9 @@ phone unprompted (it uses trial quota / billing).
 
 ### A) Cloud phone — `handheld init`
 
-The product's onboarding. Claims a trial cloud phone and connects transports.
+The product's onboarding. Claims a trial cloud phone, connects transports, opens
+the live viewer when available, and scaffolds this project as a mobile agent
+workspace.
 **How it authenticates depends on whether a key is already available:**
 
 - **You're an agent / headless / CI, and you HAVE a key** — set it in the
@@ -45,7 +47,7 @@ The product's onboarding. Claims a trial cloud phone and connects transports.
 
   ```bash
   export HANDHELD_API_KEY=<key>
-  handheld init                     # "Using env API key — skipping browser sign-in." → device ready
+  handheld init                     # "Using env API key — skipping browser sign-in." → device + workspace ready
   ```
 
 - **No key yet (interactive human at a terminal)** — `init` opens a browser login
@@ -59,6 +61,9 @@ The product's onboarding. Claims a trial cloud phone and connects transports.
 After it returns, `handheld status` shows the connected device; `handheld devices`
 lists all profiles. (`handheld create` is the alias that only ever provisions with a
 configured key — `init` now covers that case too.)
+It also creates `.handheld/mcp.json`, `.handheld/runs/`, and an editable
+`agent-workspace/` with `agent_helpers.py`, domain skills, mobile interaction
+skills, and evidence storage. Use `--no-harness-workspace` to skip that scaffold.
 
 ### B) Local device / emulator — `handheld connect --local`
 
@@ -102,7 +107,7 @@ need no API key** — a key is only required for Gateway provisioning (`init`/`c
   default and return the post-action snapshot. Point your agent's MCP config at it.
 - **One-shot task:** `handheld run "Open Settings and confirm Wi-Fi is visible"` spins up a
   sandboxed local agent wired to the handheld MCP server.
-- **Harness-shaped workspace:** `handheld run --workspace-template harness "Inspect the current screen"` adds mobile interaction skills, package-keyed domain skills, and evidence folders to the run workspace. Add `--local` for an adb device/emulator with no cloud API auth; use `--local-serial <serial>` when several are attached.
+- **Harness-shaped workspace:** `handheld init` creates the persistent project workspace; `handheld run --workspace-template harness "Inspect the current screen"` creates a per-task boxed workspace with the same helper/skill/evidence shape. Add `--local` for an adb device/emulator with no cloud API auth; use `--local-serial <serial>` when several are attached.
 - **Shell out:** the discrete subcommands above work in any script (each call is a fresh
   process; state lives in `~/.handheld`).
 

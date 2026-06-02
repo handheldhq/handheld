@@ -21,8 +21,9 @@ npx handheld i
 
 `handheld i` opens a browser login when no API key is already available, starts a
 trial cloud phone when available, connects relay and ADB transports, starts the
-bundled Tiny helper when a device command path is available, and redirects the
-approval tab to that phone's live device view.
+bundled Tiny helper when a device command path is available, redirects the
+approval tab to that phone's live device view, and scaffolds this project as a
+mobile agent workspace.
 
 **Already have a key? `init` runs headlessly — no browser.**
 When `HANDHELD_API_KEY` is present, `handheld init` skips the browser sign-in
@@ -32,11 +33,27 @@ path:
 
 ```bash
 export HANDHELD_API_KEY=<your-api-key>
-handheld init                 # creates + connects a device, no CLI auth prompt
+handheld init                 # creates + connects a device + agent workspace, no CLI auth prompt
 ```
 
 The saved global key is not per-device state. Workspace/project config can take
 precedence later when present.
+
+By default, `handheld init` also creates project-local agent setup:
+
+```text
+.handheld/
+  mcp.json
+  runs/
+agent-workspace/
+  agent_helpers.py
+  domain-skills/
+  interaction-skills/mobile/
+  evidence/
+```
+
+Use `--workspace <path>` to scaffold a different project directory, or
+`--no-harness-workspace` for the old auth/device-only behavior.
 
 ## Profiles And Sessions
 

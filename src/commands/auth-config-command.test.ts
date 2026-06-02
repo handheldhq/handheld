@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -112,13 +112,42 @@ describe("config command secret display", () => {
   it("persists env auth as the global init fallback key", async () => {
     process.env.HANDHELD_API_KEY = "muk_env_bootstrap";
 
-    await runAuth(["init", "--no-device", "--api-url", "https://api.test"]);
+    await runAuth(["init", "--no-device", "--no-harness-workspace", "--api-url", "https://api.test"]);
 
     const state = await import("../state.js");
     expect(state.getConfig()).toMatchObject({
       apiKey: "muk_env_bootstrap",
       apiUrl: "https://api.test",
     });
+  });
+
+  it("scaffolds a project harness workspace during init", async () => {
+    process.env.HANDHELD_API_KEY = "muk_env_bootstrap";
+    const project = join(home, "project");
+
+    const output = await runAuth([
+      "init",
+      "--no-device",
+      "--api-url",
+      "https://api.test",
+      "--workspace",
+      project,
+    ]);
+
+    const mcpPath = join(project, ".handheld", "mcp.json");
+    const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
+    expect(existsSync(join(project, ".handheld", "runs"))).toBe(true);
+    expect(existsSync(join(project, "agent-workspace", "agent_helpers.py"))).toBe(true);
+    expect(existsSync(join(project, "agent-workspace", "interaction-skills", "mobile", "observe-and-act.md"))).toBe(true);
+    expect(existsSync(join(project, "agent-workspace", "domain-skills", "README.md"))).toBe(true);
+    expect(mcp.mcpServers.handheld.env).toEqual({
+      HANDHELD_API_URL: "https://api.test",
+      HANDHELD_EVIDENCE_DIR: join(project, "agent-workspace", "evidence"),
+    });
+    expect(mcp.mcpServers.handheld.args).toContain("--mcp");
+    expect(mcp.mcpServers.handheld.args).not.toContain("--device");
+    expect(output).toContain(`Workspace: ${project}`);
+    expect(output).toContain(`MCP config: ${mcpPath}`);
   });
 
   it("points missing cloud auth at env-first setup", async () => {

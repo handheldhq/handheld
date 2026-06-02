@@ -10,6 +10,7 @@ import {
 import { basename, join, resolve } from "node:path";
 import type { Command } from "commander";
 import { AuthError, getResolvedDevice, requireApiKey, requireApiUrl } from "../auth.js";
+import { ensureHarnessAgentWorkspace } from "../harness-workspace.js";
 import { connectDevice, connectLocalDevice } from "./connect.js";
 
 const DIR_MODE = 0o700;
@@ -348,7 +349,6 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   const domainSkillsDir = join(agentWorkspaceDir, "domain-skills");
   const evidenceDir = join(workspaceDir, "evidence");
   const agentEvidenceDir = join(agentWorkspaceDir, "evidence");
-  const interactionSkillsDir = join(agentWorkspaceDir, "interaction-skills", "mobile");
   const logsDir = join(workspaceDir, "logs");
   ensureDir(workspaceDir);
   ensureDir(agentWorkspaceDir);
@@ -356,9 +356,6 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   ensureDir(evidenceDir);
   ensureDir(agentEvidenceDir);
   ensureDir(logsDir);
-  if (workspaceTemplate === "harness") {
-    ensureDir(interactionSkillsDir);
-  }
 
   const mcpServer: HandheldMcpServerConfig = {
     args: input.cliArgs ?? defaultMcpArgs(input.mcpDeviceId === undefined ? input.deviceId : input.mcpDeviceId),
@@ -395,23 +392,24 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   writePrivateFile(agentsPath, agents);
   writePrivateFile(claudePath, agents);
   writePrivateFile(taskPath, taskMarkdown);
-  writePrivateFile(
-    join(agentWorkspaceDir, "README.md"),
-    renderAgentWorkspaceReadme(workspaceTemplate),
-  );
-  writePrivateFile(
-    join(domainSkillsDir, "README.md"),
-    renderDomainSkillsReadme(),
-  );
-  writePrivateFile(
-    join(agentEvidenceDir, "README.md"),
-    renderEvidenceReadme(),
-  );
   if (workspaceTemplate === "harness") {
-    writeHarnessWorkspaceTemplate({
+    ensureHarnessAgentWorkspace({
       agentWorkspaceDir,
-      interactionSkillsDir,
+      overwrite: true,
     });
+  } else {
+    writePrivateFile(
+      join(agentWorkspaceDir, "README.md"),
+      renderAgentWorkspaceReadme(),
+    );
+    writePrivateFile(
+      join(domainSkillsDir, "README.md"),
+      renderDomainSkillsReadme(),
+    );
+    writePrivateFile(
+      join(agentEvidenceDir, "README.md"),
+      renderEvidenceReadme(),
+    );
   }
 
   return {

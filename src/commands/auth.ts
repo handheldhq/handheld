@@ -6,6 +6,10 @@ import {
   requireApiUrl,
 } from "../auth.js";
 import { ApiError, HandheldApiClient } from "../api-client.js";
+import {
+  createProjectHarnessWorkspace,
+  type ProjectHarnessWorkspace,
+} from "../harness-workspace.js";
 import { getConfig, setConfig } from "../state.js";
 import { maskApiKey } from "../redact.js";
 import { connectDevice } from "./connect.js";
@@ -509,13 +513,16 @@ Caveats:
   program
     .command("init")
     .alias("i")
-    .description("one-shot bringup: sign in (or reuse a key), claim a trial cloud phone, and connect it")
+    .description("first-run setup: sign in, claim/connect a phone, open the viewer, and scaffold an agent workspace")
     .option(
       "--api-url <url>",
       `API URL (overrides HANDHELD_API_URL env and config; default ${DEFAULT_API_URL})`
     )
     .option("--no-device", "only sign in; do not create or select a device")
     .option("--no-connect", "do not connect transports after the device starts")
+    .option("--workspace <path>", "project directory to scaffold for agent phone work (default current directory)")
+    .option("--workspace-template <name>", "agent workspace template to scaffold (harness)", "harness")
+    .option("--no-harness-workspace", "skip project-local harness workspace scaffolding")
     .option("--no-open", "print the login URL without opening a browser")
     .option("--with-adb", "also request provider ADB during init/connect")
     .option(
@@ -527,19 +534,21 @@ Caveats:
       "after",
       `
 Arg grammar:
-  handheld init [--api-url <url>] [--no-device] [--no-connect] [--no-open] [--with-adb] [--session-ttl <hours>]
+  handheld init [--api-url <url>] [--workspace <path>] [--no-harness-workspace] [--no-device] [--no-connect] [--no-open] [--with-adb] [--session-ttl <hours>]
 
 Examples:
-  handheld init                              # browser sign-in, claim a trial phone, connect it
+  handheld init                              # browser sign-in, claim/connect a phone, scaffold this project for agents
   HANDHELD_API_KEY=hk_... handheld init      # agent/CI path: no browser; stores the global key
+  handheld init --workspace ~/my-app          # scaffold a specific project directory
   handheld init --with-adb                   # also bring up the ADB transport, not just relay
-  handheld init --no-device                  # just sign in and store the key
+  handheld init --no-device                  # sign in and scaffold workspace, but do not claim a phone
 
 Caveats:
   - With HANDHELD_API_KEY present it skips the browser entirely and saves that account key in ~/.handheld/config.json.
   - Saved config keys remain the global fallback; workspace/project config can override later when present.
   - Without a key it opens a browser device-code flow; use --no-open on a headless host.
-  - Claims a TRIAL cloud phone and sets it as default-device, so later bare \`connect\`/\`run\` target it.
+  - Claims a TRIAL cloud phone, sets it as default-device, connects it, and opens the live viewer when available.
+  - Scaffolds a project-local harness workspace by default: .handheld/, agent-workspace/, helpers, skills, and evidence.
   - For a LOCAL adb device you don't need init at all — just \`handheld connect --local\`.`
     )
     .action(
@@ -547,9 +556,12 @@ Caveats:
         apiUrl?: string;
         connect?: boolean;
         device?: boolean;
+        harnessWorkspace?: boolean;
         open?: boolean;
         withAdb?: boolean;
         sessionTtl?: number;
+        workspace?: string;
+        workspaceTemplate?: string;
       }) => {
         const json = program.opts().json;
         try {
@@ -580,6 +592,7 @@ Caveats:
           let deviceId: string | null = null;
           let connection: Awaited<ReturnType<typeof connectDevice>> | null =
             null;
+          let workspace: ProjectHarnessWorkspace | null = null;
           try {
             deviceId =
               opts.device === false
@@ -604,6 +617,17 @@ Caveats:
                   : {}),
                 webrtcOnly: opts.withAdb !== true,
                 withAdb: opts.withAdb,
+              });
+            }
+            if (opts.harnessWorkspace !== false) {
+              const workspaceTemplate = (opts.workspaceTemplate ?? "harness").trim().toLowerCase();
+              if (workspaceTemplate !== "harness") {
+                throw new Error('unsupported workspace template "' + opts.workspaceTemplate + '". Supported templates: harness');
+              }
+              workspace = createProjectHarnessWorkspace({
+                apiUrl: login.apiUrl,
+                deviceId,
+                rootDir: opts.workspace,
               });
             }
           } catch (err) {
@@ -644,6 +668,15 @@ Caveats:
                     : null,
                   defaultDevice: deviceId,
                   ok: true,
+                  workspace: workspace
+                    ? {
+                        agentWorkspace: workspace.agentWorkspaceDir,
+                        evidence: workspace.evidenceDir,
+                        mcpConfig: workspace.mcpConfigPath,
+                        root: workspace.rootDir,
+                        runs: workspace.runsDir,
+                      }
+                    : null,
                 },
                 null,
                 2
@@ -660,6 +693,12 @@ Caveats:
             console.log("Ready: handheld tap, handheld swipe, handheld snap, and handheld shell can use this device.");
           } else {
             console.log("Next: handheld devices");
+          }
+          if (workspace) {
+            console.log(`Workspace: ${workspace.rootDir}`);
+            console.log(`Agent workspace: ${workspace.agentWorkspaceDir}`);
+            console.log(`MCP config: ${workspace.mcpConfigPath}`);
+            console.log('Next: handheld run "Open Settings and tell me what you see" --workspace-template harness');
           }
         } catch (err) {
           console.error("Init failed:", (err as Error).message);
