@@ -2045,6 +2045,59 @@ function mcpListDomainSkills(): Record<string, unknown> {
   };
 }
 
+export function handleAgentSpaceToolCall(
+  name: string,
+  args: Record<string, unknown> | undefined,
+): ReturnType<typeof jsonContent> {
+  switch (name) {
+    case "list_domain_skills": {
+      return jsonContent(mcpListDomainSkills());
+    }
+
+    case "read_domain_skill": {
+      const roots = mcpAgentSpaceRoots();
+      return jsonContent(
+        readDomainSkill({
+          path: requiredString(args, "path"),
+          projectAgentSpaceDir: roots.projectAgentSpaceDir,
+          runAgentSpaceDir: roots.runAgentSpaceDir,
+          scope: mcpDomainSkillScope(args?.scope),
+        })
+      );
+    }
+
+    case "save_domain_skill_candidate": {
+      const roots = mcpAgentSpaceRoots();
+      return jsonContent({
+        ok: true,
+        skill: writeRunDomainSkill({
+          body: requiredString(args, "body"),
+          packageName: optionalString(args, "packageName"),
+          path: optionalString(args, "path"),
+          runAgentSpaceDir: roots.runAgentSpaceDir,
+          title: optionalString(args, "title"),
+        }),
+      });
+    }
+
+    case "promote_domain_skill": {
+      const roots = mcpAgentSpaceRoots();
+      return jsonContent({
+        ok: true,
+        skill: promoteRunDomainSkill({
+          overwrite: args?.overwrite === true,
+          path: requiredString(args, "path"),
+          projectAgentSpaceDir: roots.projectAgentSpaceDir,
+          runAgentSpaceDir: roots.runAgentSpaceDir,
+        }),
+      });
+    }
+
+    default:
+      throw new Error(`Unsupported agent-space tool: ${name}`);
+  }
+}
+
 function mcpDomainSkillScope(value: unknown): "project" | "run" {
   if (value === undefined || value === null || value === "") return "run";
   if (value === "run" || value === "project") return value;
@@ -2503,48 +2556,11 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
           };
         }
 
-        case "list_domain_skills": {
-          return jsonContent(mcpListDomainSkills());
-        }
-
-        case "read_domain_skill": {
-          const roots = mcpAgentSpaceRoots();
-          return jsonContent(
-            readDomainSkill({
-              path: requiredString(args, "path"),
-              projectAgentSpaceDir: roots.projectAgentSpaceDir,
-              runAgentSpaceDir: roots.runAgentSpaceDir,
-              scope: mcpDomainSkillScope(args?.scope),
-            })
-          );
-        }
-
-        case "save_domain_skill_candidate": {
-          const roots = mcpAgentSpaceRoots();
-          return jsonContent({
-            ok: true,
-            skill: writeRunDomainSkill({
-              body: requiredString(args, "body"),
-              packageName: optionalString(args, "packageName"),
-              path: optionalString(args, "path"),
-              runAgentSpaceDir: roots.runAgentSpaceDir,
-              title: optionalString(args, "title"),
-            }),
-          });
-        }
-
-        case "promote_domain_skill": {
-          const roots = mcpAgentSpaceRoots();
-          return jsonContent({
-            ok: true,
-            skill: promoteRunDomainSkill({
-              overwrite: args?.overwrite === true,
-              path: requiredString(args, "path"),
-              projectAgentSpaceDir: roots.projectAgentSpaceDir,
-              runAgentSpaceDir: roots.runAgentSpaceDir,
-            }),
-          });
-        }
+        case "list_domain_skills":
+        case "read_domain_skill":
+        case "save_domain_skill_candidate":
+        case "promote_domain_skill":
+          return handleAgentSpaceToolCall(name, args);
       }
 
       const { relay, adb, conn } = getTransport(deviceId);
