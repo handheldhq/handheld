@@ -113,6 +113,7 @@ need no API key** — a key is only required for Gateway provisioning (`init`/`c
 
 ## Maintenance
 
+- `handheld uninstall` — dry-run local cleanup; add `--yes` to remove `~/.handheld`, project `.handheld/`, and `agent-workspace/` for test resets.
 - `handheld status` — active connections + transport health; add `--prune` to remove stale records with no usable relay or ADB transport.
 - `handheld doctor` — read-only, secret-safe diagnostics for config, target selection, relay, ADB, Tiny, and stale-prune readiness.
 - `handheld disconnect [device-id]` — tear down. A bare `disconnect` resolves the sole

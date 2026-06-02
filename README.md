@@ -63,6 +63,7 @@ handheld devices                        # list Gateway profiles/devices
 handheld connect <profile-id>           # start/reuse a session when transports exist
 handheld status                         # check connection health
 handheld status --prune                 # remove stale saved connection records
+handheld uninstall                      # preview removal of ~/.handheld + project .handheld/agent-workspace
 handheld doctor                         # secret-safe config/target/transport diagnostics
 handheld disconnect                     # tear down
 ```

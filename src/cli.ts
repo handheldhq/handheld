@@ -12,6 +12,7 @@ import { registerBillingCommand } from "./commands/billing.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerTeachCommand } from "./commands/teach.js";
 import { registerGuideCommand, GUIDE_TOPICS } from "./commands/guide.js";
+import { registerUninstallCommand } from "./commands/uninstall.js";
 import { parseSettleMs } from "./action-wait.js";
 
 const program = new Command()
@@ -40,6 +41,7 @@ registerBillingCommand(program);
 registerRunCommand(program);
 registerTeachCommand(program);
 registerGuideCommand(program);
+registerUninstallCommand(program);
 
 program.addHelpText(
   "after",
