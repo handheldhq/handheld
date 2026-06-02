@@ -126,7 +126,8 @@ async function waitForChildReady(
 
 export async function requestRelayDaemon(
   socketPath: string,
-  request: Omit<DaemonRequest, "id"> & { id?: string }
+  request: Omit<DaemonRequest, "id"> & { id?: string },
+  opts: { timeoutMs?: number } = {}
 ): Promise<DaemonResponse> {
   return await new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
@@ -136,38 +137,60 @@ export async function requestRelayDaemon(
       input: socket,
     });
 
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
-      rl.close();
+      try {
+        rl.close();
+      } catch {}
       socket.destroy();
     };
-
-    const timeout = setTimeout(() => {
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
       cleanup();
-      reject(new Error("Relay daemon request timed out"));
-    }, 60_000);
+      callback();
+    };
+    const fail = (error: unknown) => {
+      finish(() => {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    };
+    const failClosed = () => {
+      fail(new Error("Relay daemon closed before responding"));
+    };
+
+    timeout = setTimeout(() => {
+      fail(new Error("Relay daemon request timed out"));
+    }, opts.timeoutMs ?? 60_000);
 
     socket.once("connect", () => {
-      socket.write(
-        JSON.stringify({
-          ...request,
-          id,
-        }) + "\n"
-      );
+      if (settled) return;
+      try {
+        socket.write(
+          JSON.stringify({
+            ...request,
+            id,
+          }) + "\n"
+        );
+      } catch (error) {
+        fail(error);
+      }
     });
 
-    socket.once("error", (error) => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(error);
-    });
+    socket.once("error", fail);
+    socket.once("end", failClosed);
+    socket.once("close", failClosed);
+    rl.once("error", fail);
+    rl.once("close", failClosed);
 
     rl.once("line", (line) => {
-      clearTimeout(timeout);
-      cleanup();
       try {
-        resolve(JSON.parse(line) as DaemonResponse);
+        const response = JSON.parse(line) as DaemonResponse;
+        finish(() => resolve(response));
       } catch (error) {
-        reject(error);
+        fail(error);
       }
     });
   });

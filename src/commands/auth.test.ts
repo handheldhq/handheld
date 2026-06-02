@@ -4,6 +4,15 @@ import {
   isTerminalDeviceFailureStatus,
   resolveLoginApiUrl,
 } from "./auth.js";
+import { maskApiKey } from "../redact.js";
+
+describe("config secret display", () => {
+  it("masks API keys for keyed and full config output", () => {
+    expect(maskApiKey("muk_1234567890abcdef")).toBe("muk_1234...");
+    expect(maskApiKey("short")).toBe("****");
+    expect(maskApiKey("   ")).toBe("");
+  });
+});
 
 describe("configuredApiKey (lets init skip browser sign-in)", () => {
   afterEach(() => {

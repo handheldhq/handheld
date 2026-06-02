@@ -6,10 +6,14 @@ import { dirname, resolve } from "node:path";
 import {
   TINY_PACKAGE,
   TINY_LEGACY_PACKAGE,
+  TINY_FOREGROUND_SIGNATURE_CAPABILITY,
+  TINY_SET_TEXT_WHITESPACE_CAPABILITY,
   bundledTinyApkPath,
   tinyDeviceInstallCommand,
   tinyDeviceRequestCommand,
   tinyDeviceStartCommand,
+  tinySignaturePath,
+  tinySupportsRequiredAgentShape,
   tinySetTextBody,
 } from "./tiny-helper.js";
 
@@ -18,7 +22,7 @@ const SOURCE_ROOT = resolve(
   "../android/tiny-snapshot-helper-v2",
 );
 const TINY_SHA256 =
-  "631aba408d12a586aa8ebffaaadfb32afe83d5bb7d04f6bc9ce9ca6120fe6a08";
+  "08377181ea1228078740552cf4f0474c04fdb219c5ee08d0125391a55273df93";
 
 function helperSource(name: string): string {
   return readFileSync(
@@ -51,6 +55,13 @@ describe("Tiny device commands", () => {
       "curl -sf --max-time 5 -H 'X-Mobile-Harness-Tiny-Token: token' 'http://127.0.0.1:6792/v2/snapshot'",
     );
   });
+
+  it("builds foreground signature paths with an optional event sequence shortcut", () => {
+    expect(tinySignaturePath()).toBe("/v2/signature");
+    expect(tinySignaturePath({ previousEventSeq: 42 })).toBe(
+      "/v2/signature?previousEventSeq=42"
+    );
+  });
 });
 
 describe("Tiny semantic setText (deterministic text entry, F6)", () => {
@@ -74,6 +85,43 @@ describe("Tiny semantic setText (deterministic text entry, F6)", () => {
     const setText = helperSource("SetTextService.java");
     expect(setText).toContain("ACTION_SET_TEXT");
     expect(setText.toLowerCase()).toContain("semantic");
+  });
+
+  it("keeps setText payload whitespace intact on the device side", () => {
+    expect(JSON.parse(tinySetTextBody({ text: "  keep me  " })).text).toBe("  keep me  ");
+
+    const setText = helperSource("SetTextService.java");
+    expect(setText).toContain('String text = firstRaw(params, "text", "value");');
+    expect(setText).not.toContain('String text = first(params, "text", "value");');
+    expect(setText).toContain('String[] parts = body.split("&", -1);');
+  });
+
+  it("requires the whitespace-preserving Tiny capability before reusing a helper", () => {
+    expect(
+      tinySupportsRequiredAgentShape({
+        capabilities: {
+          observe: true,
+          responseChunks: true,
+          [TINY_FOREGROUND_SIGNATURE_CAPABILITY]: true,
+          [TINY_SET_TEXT_WHITESPACE_CAPABILITY]: true,
+        },
+      })
+    ).toBe(true);
+
+    expect(
+      tinySupportsRequiredAgentShape({
+        capabilities: {
+          observe: true,
+          responseChunks: true,
+        },
+      })
+    ).toBe(false);
+    expect(helperSource("TinyV2Instrumentation.java")).toContain(
+      '.put("setTextWhitespace", true)'
+    );
+    expect(helperSource("TinyV2Instrumentation.java")).toContain(
+      '.put("foregroundSignature", true)'
+    );
   });
 });
 

@@ -131,6 +131,23 @@ final class SnapshotService {
     }
   }
 
+  JSONObject buildSignature() throws Exception {
+    List<TreeNode> roots = captureRootsWithRetry();
+    try {
+      SnapshotMeta meta = metadataFor(roots);
+      JSONObject result = new JSONObject()
+          .put("ok", true)
+          .put("backend", "tiny");
+      put(result, "bundleId", meta.packageName);
+      put(result, "appName", meta.appName);
+      put(result, "layoutDigest", computeLayoutDigest(roots));
+      attachForeground(result);
+      return result;
+    } finally {
+      recycle(roots);
+    }
+  }
+
   JSONObject shapeObservation(JSONObject snapshot, Map<String, String> params) throws Exception {
     JSONArray rawNodes = snapshot.optJSONArray("nodes");
     JSONArray nodes = new JSONArray();
@@ -826,14 +843,16 @@ final class SnapshotService {
   private static String[] parseFocus(String dump) {
     if (dump == null) return null;
     String[] lines = dump.split("\n");
-    String[] component = matchFocus(findLine(lines, "mFocusedApp"));
-    if (component == null) component = matchFocus(findLine(lines, "mCurrentFocus"));
+    String[] component = firstMatchingFocus(lines, "mFocusedApp");
+    if (component == null) component = firstMatchingFocus(lines, "mCurrentFocus");
     return component;
   }
 
-  private static String findLine(String[] lines, String key) {
+  private static String[] firstMatchingFocus(String[] lines, String key) {
     for (String line : lines) {
-      if (line != null && line.contains(key)) return line;
+      if (line == null || !line.contains(key)) continue;
+      String[] component = matchFocus(line);
+      if (component != null) return component;
     }
     return null;
   }

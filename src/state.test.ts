@@ -75,7 +75,7 @@ describe("config permission repair", () => {
     }
   );
 
-  it("falls back to the first connection when defaultDevice is stale", async () => {
+  it("does not fall back to the first connection when defaultDevice is stale", async () => {
     const state = await import("./state.js");
     state.setConfig({ defaultDevice: "missing-device" });
     state.saveConnection({
@@ -87,6 +87,6 @@ describe("config permission repair", () => {
       sessionId: "session",
     });
 
-    expect(state.getActiveConnection()?.deviceId).toBe("active-device");
+    expect(state.getActiveConnection()).toBeUndefined();
   });
 });

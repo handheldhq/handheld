@@ -182,10 +182,12 @@ export async function teardown(deviceId: string): Promise<void> {
   // A local connection owns no Gateway session and no SSH-tunneled adb device:
   // just drop the Tiny port-forward and the saved connection. Calling the
   // Gateway here would needlessly require an API key and fail (no such device).
+  const adbSerial = conn.adb?.serial;
+  const adbTunnelPort = conn.adb?.tunnelPort ?? 0;
   if (conn.local) {
-    if (conn.adb?.serial && conn.adb.tunnelPort) {
+    if (adbSerial && adbTunnelPort) {
       try {
-        execAdb(["-s", conn.adb.serial, "forward", "--remove", `tcp:${conn.adb.tunnelPort}`]);
+        execAdb(["-s", adbSerial, "forward", "--remove", `tcp:${adbTunnelPort}`]);
       } catch {}
     }
     removeConnection(deviceId);
@@ -193,8 +195,8 @@ export async function teardown(deviceId: string): Promise<void> {
   }
 
   // Disconnect adb
-  if (conn.adb?.serial) {
-    try { execAdb(["disconnect", conn.adb.serial]); } catch {}
+  if (adbSerial) {
+    try { execAdb(["disconnect", adbSerial]); } catch {}
   }
 
   const api = new HandheldApiClient();

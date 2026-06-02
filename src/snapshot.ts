@@ -52,6 +52,14 @@ export interface SnapshotNode {
   displayDepth?: number;
 }
 
+export interface SnapshotForegroundSignature {
+  activity?: string;
+  bundleId?: string;
+  component?: string;
+  eventSeq?: number;
+  layoutDigest?: string;
+}
+
 export interface SnapshotDocument {
   actionDigest?: string;
   activity?: string;
@@ -67,6 +75,7 @@ export interface SnapshotDocument {
   // nodes), this is the same regardless of `interactive`/`compact` — the only
   // digest safe to compare across two snapshots taken with different filters.
   layoutDigest?: string;
+  foregroundSignature?: SnapshotForegroundSignature;
   nodes: SnapshotNode[];
   raw: Record<string, unknown>;
   treeDigest?: string;
@@ -86,6 +95,122 @@ export interface FormatSnapshotOptions {
   // Keep nodes below the fold (skip viewport culling) while still collapsing
   // structural noise.
   offscreen?: boolean;
+}
+
+export interface CompactAgentSnapshotNode {
+  actions: string[];
+  bounds?: SnapshotBounds;
+  disabled?: boolean;
+  id?: string;
+  label?: string;
+  ref: string;
+  role: string;
+  selectors?: {
+    id?: string;
+    label?: string;
+    text?: string;
+  };
+  state?: {
+    checked?: boolean;
+    focused?: boolean;
+    selected?: boolean;
+  };
+  stableId?: string;
+  subtitle?: string;
+  value?: string;
+}
+
+export interface CompactAgentSnapshotOutput {
+  activity?: string;
+  appName?: string;
+  backend: SnapshotDocument["backend"];
+  bundleId?: string;
+  capturedAt: string;
+  component?: string;
+  deviceId: string;
+  foregroundSignature?: SnapshotForegroundSignature;
+  layoutDigest?: string;
+  nodes: CompactAgentSnapshotNode[];
+  totalNodeCount: number;
+}
+
+export function foregroundSignatureOf(
+  snapshot: Pick<SnapshotDocument, "activity" | "bundleId" | "component" | "eventSeq" | "layoutDigest">
+): SnapshotForegroundSignature {
+  return {
+    activity: snapshot.activity,
+    bundleId: snapshot.bundleId,
+    component: canonicalForegroundComponent(snapshot.component),
+    eventSeq: snapshot.eventSeq,
+    layoutDigest: snapshot.layoutDigest,
+  };
+}
+
+export function canonicalForegroundComponent(component: string | undefined): string | undefined {
+  if (!component) return undefined;
+  const slash = component.indexOf("/");
+  if (slash <= 0 || slash === component.length - 1) return component;
+  const packageName = component.slice(0, slash);
+  const rawActivity = component.slice(slash + 1);
+  const activity = rawActivity.startsWith(".")
+    ? packageName + rawActivity
+    : rawActivity.includes(".")
+      ? rawActivity
+      : packageName + "." + rawActivity;
+  return packageName + "/" + activity;
+}
+
+function stampForegroundSignature(snapshot: SnapshotDocument): SnapshotDocument {
+  const current = foregroundSignatureOf(snapshot);
+  const previous = snapshot.foregroundSignature;
+  snapshot.foregroundSignature = {
+    activity: current.activity ?? previous?.activity,
+    bundleId: current.bundleId ?? previous?.bundleId,
+    component: current.component ?? canonicalForegroundComponent(previous?.component),
+    eventSeq: current.eventSeq ?? previous?.eventSeq,
+    layoutDigest: current.layoutDigest ?? previous?.layoutDigest,
+  };
+  return snapshot;
+}
+
+export interface ForegroundSignatureComparison {
+  ok: boolean;
+  reason?: string;
+}
+
+function hasComparableSignature(
+  signature: SnapshotForegroundSignature | null | undefined
+): signature is SnapshotForegroundSignature & { component: string; layoutDigest: string } {
+  return Boolean(
+    signature &&
+      canonicalForegroundComponent(signature.component) &&
+      typeof signature.layoutDigest === "string" &&
+      signature.layoutDigest.length > 0
+  );
+}
+
+export function compareForegroundSignatures(input: {
+  cached?: SnapshotForegroundSignature | null;
+  live?: SnapshotForegroundSignature | null;
+}): ForegroundSignatureComparison {
+  if (!hasComparableSignature(input.cached)) {
+    return { ok: false, reason: "missing cached foreground signature" };
+  }
+  if (!hasComparableSignature(input.live)) {
+    return { ok: false, reason: "missing live foreground signature" };
+  }
+  const cachedComponent = canonicalForegroundComponent(input.cached.component)!;
+  const liveComponent = canonicalForegroundComponent(input.live.component)!;
+  if (cachedComponent !== liveComponent) {
+    return {
+      ok: false,
+      reason: `foreground changed from ${cachedComponent} to ${liveComponent}`,
+    };
+  }
+  if (input.cached.layoutDigest !== input.live.layoutDigest) {
+    return { ok: false, reason: "layout changed since last snap" };
+  }
+  return { ok: true };
 }
 
 const SNAPSHOT_DIR = join(HANDHELD_HOME, "snapshots");
@@ -235,7 +360,7 @@ export function normalizeTinySnapshot(input: {
   });
   resolveTitles(nodes);
 
-  return {
+  const document: SnapshotDocument = {
     appName: firstString(raw, ["appName", "package"]),
     backend: "tiny",
     bundleId: firstString(raw, ["bundleId", "package"]),
@@ -254,6 +379,8 @@ export function normalizeTinySnapshot(input: {
     treeDigest: firstString(raw, ["treeDigest"]),
     viewport: deriveViewport(nodes),
   };
+  document.foregroundSignature = foregroundSignatureOf(document);
+  return document;
 }
 
 // Resolve each actionable node's display name. An own contentDescription wins as
@@ -368,6 +495,21 @@ function nodeActions(node: SnapshotNode): string[] {
   return actions;
 }
 
+function hasPositiveArea(node: SnapshotNode): boolean {
+  const b = node.bounds;
+  return !b || (b.bottom > b.top && b.right > b.left);
+}
+
+function hasDisplayName(node: SnapshotNode): boolean {
+  return Boolean(node.title ?? node.label ?? node.value ?? node.identifier);
+}
+
+function keepDefaultNode(node: SnapshotNode): boolean {
+  if (!hasPositiveArea(node)) return false;
+  if (!isInteractiveNode(node)) return true;
+  return hasDisplayName(node);
+}
+
 // IME / soft-keyboard windows. Their keys are almost never ref-tap targets (you
 // `type` instead), so the renderer collapses them to a single hint line.
 function isImePackage(bundleId: string | undefined): boolean {
@@ -419,7 +561,7 @@ function compactKeep(
   nodes: SnapshotNode[],
   opts: { actionableOnly?: boolean } = {}
 ): SnapshotNode[] {
-  const keep = new Set(nodes.filter(isInteractiveNode));
+  const keep = new Set(nodes.filter((node) => isInteractiveNode(node) && keepDefaultNode(node)));
   // `-i` / actionableOnly: only the tappable/typeable nodes — skip the readable-text
   // pass below (this is what `snap -i` returns).
   if (opts.actionableOnly) return nodes.filter((node) => keep.has(node));
@@ -432,9 +574,10 @@ function compactKeep(
   const seen = [...keep]
     .flatMap((node) => [node.title, node.subtitle, node.label, node.value])
     .filter(Boolean)
-    .join(" ");
+    .join("\u0000");
   for (const node of nodes) {
     if (keep.has(node)) continue;
+    if (!keepDefaultNode(node)) continue;
     if (node.consumed) continue;
     // "Own displayed text" = a non-empty `value` (the node's getText()), which
     // is role-agnostic so it catches TextView, TextClock, Chronometer, and
@@ -541,6 +684,49 @@ export function snapshotForOutput(
     ...snapshot,
     nodes: snapshotNodesForDisplay(snapshot, { interactive: opts.interactive ?? false }),
     raw: undefined,
+    totalNodeCount: snapshot.nodes.length,
+  };
+}
+
+export function snapshotForAgent(snapshot: SnapshotDocument): CompactAgentSnapshotOutput {
+  const nodes = snapshotNodesForDisplay(snapshot, { interactive: true }).map((node) => {
+    const state: CompactAgentSnapshotNode["state"] = {};
+    if (node.focused) state.focused = true;
+    if (node.checkable) state.checked = node.checked;
+    if (node.selected) state.selected = true;
+    const id = node.identifier ? idLeaf(node.identifier) : undefined;
+    const label = node.title ?? node.label;
+    const value = node.value ?? (node.editable ? node.label : undefined);
+    const selectors: CompactAgentSnapshotNode["selectors"] = {};
+    if (id) selectors.id = id;
+    if (label) selectors.label = label;
+    if (value && value !== label) selectors.text = value;
+    return {
+      actions: nodeActions(node),
+      bounds: node.bounds,
+      disabled: node.enabled ? undefined : true,
+      id,
+      label,
+      ref: node.ref,
+      role: displayRole(node.role),
+      selectors: Object.keys(selectors).length ? selectors : undefined,
+      state: Object.keys(state).length ? state : undefined,
+      stableId: node.stableId,
+      subtitle: node.subtitle,
+      value,
+    };
+  });
+  return {
+    activity: snapshot.activity,
+    appName: snapshot.appName,
+    backend: snapshot.backend,
+    bundleId: snapshot.bundleId,
+    capturedAt: snapshot.capturedAt,
+    component: snapshot.component,
+    deviceId: snapshot.deviceId,
+    foregroundSignature: snapshot.foregroundSignature ?? foregroundSignatureOf(snapshot),
+    layoutDigest: snapshot.layoutDigest,
+    nodes,
     totalNodeCount: snapshot.nodes.length,
   };
 }
@@ -678,6 +864,7 @@ export function formatSnapshot(
 }
 
 export function saveLastSnapshot(snapshot: SnapshotDocument): void {
+  stampForegroundSignature(snapshot);
   mkdirSync(SNAPSHOT_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(
     join(SNAPSHOT_DIR, `${snapshot.deviceId}.json`),
@@ -689,7 +876,7 @@ export function saveLastSnapshot(snapshot: SnapshotDocument): void {
 export function loadLastSnapshot(deviceId: string): SnapshotDocument | null {
   const path = join(SNAPSHOT_DIR, `${deviceId}.json`);
   if (!existsSync(path)) return null;
-  return JSON.parse(readFileSync(path, "utf8")) as SnapshotDocument;
+  return stampForegroundSignature(JSON.parse(readFileSync(path, "utf8")) as SnapshotDocument);
 }
 
 // Drop the cached snapshot after a navigation that changes the screen without

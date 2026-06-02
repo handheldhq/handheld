@@ -16,6 +16,8 @@ export const TINY_LEGACY_PACKAGE = "com.example.tinysnapshot";
 export const TINY_RUNNER = "com.example.tinysnapshot.v2/.TinyV2Instrumentation";
 export const TINY_DEVICE_PORT = 6792;
 export const TINY_TOKEN_HEADER = "X-Mobile-Harness-Tiny-Token";
+export const TINY_SET_TEXT_WHITESPACE_CAPABILITY = "setTextWhitespace";
+export const TINY_FOREGROUND_SIGNATURE_CAPABILITY = "foregroundSignature";
 const TINY_API_PREFIX = "/v2";
 
 export interface TinyHelperState {
@@ -47,6 +49,19 @@ export interface TinyChangeWaitOptions {
   requestTimeoutMs?: number;
   since?: number;
   timeoutMs?: number;
+}
+
+export interface TinyForegroundSignature {
+  activity?: string;
+  appName?: string;
+  backend?: string;
+  bundleId?: string;
+  cached?: boolean;
+  component?: string;
+  elapsedMs?: number;
+  eventSeq?: number;
+  layoutDigest?: string;
+  ok?: boolean;
 }
 
 // Pointer-injection via Tiny's resident UiAutomation (/v2/input). When `settle`
@@ -350,6 +365,15 @@ export function tinyWaitForChangePath(opts: TinyChangeWaitOptions): string {
   return query ? `${TINY_API_PREFIX}/waitForChange?${query}` : `${TINY_API_PREFIX}/waitForChange`;
 }
 
+export function tinySignaturePath(opts: { previousEventSeq?: number } = {}): string {
+  const params = new URLSearchParams();
+  if (typeof opts.previousEventSeq === "number" && Number.isFinite(opts.previousEventSeq)) {
+    params.set("previousEventSeq", String(Math.max(0, Math.round(opts.previousEventSeq))));
+  }
+  const query = params.toString();
+  return query ? `${TINY_API_PREFIX}/signature?${query}` : `${TINY_API_PREFIX}/signature`;
+}
+
 /**
  * Client-side abort budget for a Tiny wait request. The device bounds itself by
  * `timeoutMs`, but stable-sampling on a busy screen can overrun that, so the
@@ -402,7 +426,7 @@ export async function startTinyHelper(input: {
   // (re)start it as before, so this only ever reuses a Tiny we can authenticate.
   try {
     const status = await fetchTinyStatus(baseUrl, token, 1_500);
-    if (status.ready === true) {
+    if (status.ready === true && tinySupportsRequiredAgentShape(status)) {
       return {
         baseUrl,
         port,
@@ -415,12 +439,14 @@ export async function startTinyHelper(input: {
   try {
     startTinyInstrumentation(input.serial, token);
     const status = await waitForTinyStatus(baseUrl, token);
-    return {
-      baseUrl,
-      port,
-      status: typeof status.status === "string" ? status.status : "ready",
-      tokenFile,
-    };
+    if (tinySupportsRequiredAgentShape(status)) {
+      return {
+        baseUrl,
+        port,
+        status: typeof status.status === "string" ? status.status : "ready",
+        tokenFile,
+      };
+    }
   } catch {}
 
   installTinyApk(input.serial);
@@ -454,6 +480,19 @@ export async function getTinySnapshot(input: {
     timeoutMs: 10_000,
     token,
   });
+}
+
+export async function getTinySignature(input: {
+  baseUrl: string;
+  tokenFile: string;
+}, opts: { previousEventSeq?: number } = {}): Promise<TinyForegroundSignature> {
+  const token = readFileSync(input.tokenFile, "utf8").trim();
+  return await fetchTinyJson({
+    baseUrl: input.baseUrl,
+    path: tinySignaturePath(opts),
+    timeoutMs: 5_000,
+    token,
+  }) as TinyForegroundSignature;
 }
 
 export async function waitTinyStable(input: {
@@ -529,6 +568,24 @@ export function tinySupportsInput(status: Record<string, unknown> | null | undef
     ? (status as { capabilities?: unknown }).capabilities
     : undefined;
   return Boolean(caps && typeof caps === "object" && (caps as { input?: unknown }).input === true);
+}
+
+function tinyCapability(status: Record<string, unknown> | null | undefined, key: string): boolean {
+  const caps = status && typeof status === "object"
+    ? (status as { capabilities?: unknown }).capabilities
+    : undefined;
+  return Boolean(caps && typeof caps === "object" && (caps as Record<string, unknown>)[key] === true);
+}
+
+export function tinySupportsRequiredAgentShape(
+  status: Record<string, unknown> | null | undefined
+): boolean {
+  return (
+    tinyCapability(status, "observe") &&
+    tinyCapability(status, "responseChunks") &&
+    tinyCapability(status, TINY_SET_TEXT_WHITESPACE_CAPABILITY) &&
+    tinyCapability(status, TINY_FOREGROUND_SIGNATURE_CAPABILITY)
+  );
 }
 
 /** Serialize a /v2/input request body, dropping undefined fields. Pure (tested). */

@@ -1,14 +1,8 @@
 import { basename } from "node:path";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import type { Command } from "commander";
-import {
-  getActiveConnection,
-  getConnection,
-  getRelayState,
-  saveConnection,
-  type Connection,
-  type TinyState,
-} from "../state.js";
+import { getRelayState, saveConnection, type Connection, type TinyState } from "../state.js";
+import { resolveConnection } from "../connection-health.js";
 import { getAuthorizationHeaders } from "../auth.js";
 import {
   RelayClient,
@@ -30,6 +24,7 @@ import {
   bundledTinyApkPath,
   ensureTinyToken,
   getTinySnapshot,
+  getTinySignature,
   getTinyStatus,
   startTinyHelper,
   tinyClipboardGet,
@@ -43,6 +38,8 @@ import {
   type TinyInputOptions,
   tinyInputBody,
   tinyScreenshot,
+  tinySignaturePath,
+  tinySupportsRequiredAgentShape,
   tinySetTextBody,
   tinyWaitForChangePath,
   tinyWaitForStablePath,
@@ -59,10 +56,14 @@ import { hasFocusedEditableField, typeViaTinySetText } from "../text-entry.js";
 import {
   formatSnapshot,
   clearLastSnapshot,
+  compareForegroundSignatures,
+  foregroundSignatureOf,
   loadLastSnapshot,
   normalizeTinySnapshot,
   saveLastSnapshot,
+  snapshotForAgent,
   snapshotNodesForDisplay,
+  type SnapshotForegroundSignature,
   type SnapshotDocument,
   type SnapshotOutput,
 } from "../snapshot.js";
@@ -177,26 +178,31 @@ function getTransport(program: Command): {
   adb: AdbTransport | null;
   deviceId: string;
 } {
-  const deviceId = program.opts().device ?? process.env.HANDHELD_DEVICE;
-  const conn = deviceId ? getConnection(deviceId) : getActiveConnection();
+  const resolved = resolveConnection({
+    device: program.opts().device as string | undefined,
+  });
 
-  if (!conn) {
+  if (!resolved.ok) {
     console.error("Not connected.");
+    console.error("Reason: " + resolved.error.reason);
     console.error(
       "Hint: run `handheld connect --local` (local adb device/emulator) or `handheld connect <device-id>` (cloud phone) first; see `handheld guide workflow`."
     );
     process.exit(1);
   }
+  const conn = resolved.value.connection;
+  const health = resolved.value.health;
 
   const relayState = getRelayState(conn);
   const relay =
-    relayState.connected && relayState.socketPath
+    health.relayAvailable && relayState.socketPath
       ? new RelayDaemonTransport(relayState.socketPath)
-      : relayState.connected && relayState.relayUrl
+      : health.relayAvailable && relayState.relayUrl && !relayState.socketPath
         ? new RelayClient(relayState.relayUrl, getAuthorizationHeaders())
         : null;
 
-  const adb = conn.adb.serial ? new AdbTransport(conn.adb.serial) : null;
+  const adbSerial = conn.adb?.serial;
+  const adb = adbSerial ? new AdbTransport(adbSerial) : null;
 
   // Stash the live transports so settleCommandResult can build a device-shell
   // TinyReader for the settle path without threading relay/adb through every
@@ -412,7 +418,8 @@ async function settleAfterSuccess<T extends TransportResult>(
 
 async function ensureTinyState(connection: Connection): Promise<TinyState> {
   if (connection.tiny) return connection.tiny;
-  if (!connection.adb.serial) {
+  const serial = connection.adb?.serial;
+  if (!serial) {
     console.error("Snapshot requires the Tiny helper or ADB, and neither is available.");
     console.error(
       "Hint: reconnect with ADB enabled (`handheld connect --local`), or bootstrap the on-device helper with `handheld tiny bootstrap`. See `handheld guide troubleshooting`."
@@ -420,17 +427,132 @@ async function ensureTinyState(connection: Connection): Promise<TinyState> {
     process.exit(1);
   }
 
-  const tiny = await startTinyHelper({ serial: connection.adb.serial });
+  const tiny = await startTinyHelper({ serial });
   saveConnection({ ...connection, tiny });
   return tiny;
 }
 
-function tapTargetFromArgs(input: {
+function fieldString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function fieldNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function tinySignatureFromRaw(raw: Record<string, unknown>): SnapshotForegroundSignature {
+  return {
+    activity: fieldString(raw.activity),
+    bundleId: fieldString(raw.bundleId),
+    component: fieldString(raw.component),
+    eventSeq: fieldNumber(raw.eventSeq),
+    layoutDigest: fieldString(raw.layoutDigest),
+  };
+}
+
+async function liveForegroundSignature(input: {
+  adb: AdbTransport | null;
+  connection: Connection;
+  previousEventSeq?: number;
+  relay: Transport | null;
+}): Promise<SnapshotForegroundSignature> {
+  let signature: SnapshotForegroundSignature;
+  if (input.connection.tiny) {
+    signature = tinySignatureFromRaw(
+      await getTinySignature(input.connection.tiny, {
+        previousEventSeq: input.previousEventSeq,
+      }) as Record<string, unknown>
+    );
+    return await completeLiveForegroundSignature(signature, input.relay, input.adb);
+  }
+
+  const serial = input.connection.adb?.serial;
+  if (serial) {
+    const tiny = await ensureTinyState(input.connection);
+    signature = tinySignatureFromRaw(
+      await getTinySignature(tiny, { previousEventSeq: input.previousEventSeq }) as Record<string, unknown>
+    );
+    return await completeLiveForegroundSignature(signature, input.relay, input.adb);
+  }
+
+  const tokenState = await ensureDeviceTiny({
+    adb: input.adb,
+    api: () => new HandheldApiClient(),
+    connection: input.connection,
+    relay: input.relay,
+  });
+  signature = tinySignatureFromRaw(
+    await readTinyJsonFromDevice({
+      adb: input.adb,
+      path: tinySignaturePath({ previousEventSeq: input.previousEventSeq }),
+      relay: input.relay,
+      token: tokenState.token,
+    })
+  );
+  return await completeLiveForegroundSignature(signature, input.relay, input.adb);
+}
+
+async function completeLiveForegroundSignature(
+  signature: SnapshotForegroundSignature,
+  relay: Transport | null,
+  adb: AdbTransport | null
+): Promise<SnapshotForegroundSignature> {
+  if (signature.component) return signature;
+  try {
+    const result = await runShell(relay, adb, currentAppCommand());
+    if (!result.ok || typeof result.data !== "string") return signature;
+    const current = parseCurrentComponent(result.data);
+    return {
+      ...signature,
+      activity: signature.activity ?? current.activity ?? undefined,
+      component: signature.component ?? current.component ?? undefined,
+    };
+  } catch {
+    return signature;
+  }
+}
+
+async function assertCachedSnapshotFresh(input: {
+  adb: AdbTransport | null;
+  connection: Connection;
+  relay: Transport | null;
+  snapshot: SnapshotDocument;
+  target: string;
+}): Promise<void> {
+  const cached = input.snapshot.foregroundSignature ?? foregroundSignatureOf(input.snapshot);
+  let live: SnapshotForegroundSignature;
+  try {
+    live = await liveForegroundSignature({
+      adb: input.adb,
+      connection: input.connection,
+      previousEventSeq: cached.eventSeq,
+      relay: input.relay,
+    });
+  } catch (error) {
+    console.error(`Cached snapshot target "${input.target}" cannot be verified.`);
+    console.error("Reason: " + (error instanceof Error ? error.message : String(error)));
+    console.error("Hint: run `handheld snap` again before using cached refs/selectors.");
+    process.exit(1);
+  }
+
+  const comparison = compareForegroundSignatures({ cached, live });
+  if (!comparison.ok) {
+    console.error(`Cached snapshot target "${input.target}" is stale.`);
+    console.error("Reason: " + (comparison.reason ?? "screen changed since last snap"));
+    console.error("Hint: screen changed since last snap — run `handheld snap` again before using cached refs/selectors.");
+    process.exit(1);
+  }
+}
+
+async function tapTargetFromArgs(input: {
   allowBareIndex?: boolean;
+  adb: AdbTransport | null;
+  connection: Connection;
   deviceId: string;
+  relay: Transport | null;
   target: string;
   y?: string;
-}): { x: number; y: number } {
+}): Promise<{ x: number; y: number }> {
   if (shouldResolveSnapshotTarget(input)) {
     const snapshot = loadLastSnapshot(input.deviceId);
     if (!snapshot) {
@@ -438,6 +560,13 @@ function tapTargetFromArgs(input: {
       console.error("Hint: run `handheld snap` first — targets resolve against the last snapshot.");
       process.exit(1);
     }
+    await assertCachedSnapshotFresh({
+      adb: input.adb,
+      connection: input.connection,
+      relay: input.relay,
+      snapshot,
+      target: input.target,
+    });
     const center = pointFromSnapshotTarget(snapshot, input.target);
     if (!center) {
       console.error(`Target "${input.target}" did not resolve to a tappable node.`);
@@ -501,14 +630,18 @@ function assertOk(result: TransportResult, label: string): void {
 
 async function focusTarget(input: {
   adb: AdbTransport | null;
+  connection: Connection;
   deviceId: string;
   relay: Transport | null;
   target?: string;
 }): Promise<void> {
   if (isFocusedTarget(input.target)) return;
-  const point = tapTargetFromArgs({
+  const point = await tapTargetFromArgs({
     allowBareIndex: true,
+    adb: input.adb,
+    connection: input.connection,
     deviceId: input.deviceId,
+    relay: input.relay,
     target: input.target!,
   });
   assertOk(
@@ -528,6 +661,7 @@ async function focusClearAndType(input: {
   adb: AdbTransport | null;
   append?: boolean;
   clear?: boolean;
+  connection: Connection;
   deviceId: string;
   relay: Transport | null;
   submit?: boolean;
@@ -541,6 +675,18 @@ async function focusClearAndType(input: {
   // semantic ACTION_SET_TEXT; --append uses paste mode (clipboard + ACTION_PASTE
   // at the cursor).
   if (input.tiny) {
+    if (input.target && isSnapshotTarget(input.target)) {
+      const snapshot = loadLastSnapshot(input.deviceId);
+      if (snapshot) {
+        await assertCachedSnapshotFresh({
+          adb: input.adb,
+          connection: input.connection,
+          relay: input.relay,
+          snapshot,
+          target: input.target,
+        });
+      }
+    }
     const viaTiny = await typeViaTinySetText({
       append: input.append,
       deviceId: input.deviceId,
@@ -908,11 +1054,16 @@ async function waitForAppWindow(
 }
 
 async function tinySnapshot(connection: Connection, deviceId: string) {
-  const tiny = await ensureTinyState(connection);
-  const raw = await captureTinySnapshotResilient(connection, tiny);
-  const snapshot = normalizeTinySnapshot({ deviceId, raw });
-  saveLastSnapshot(snapshot);
-  return snapshot;
+  try {
+    const tiny = await ensureTinyState(connection);
+    const raw = await captureTinySnapshotResilient(connection, tiny);
+    const snapshot = normalizeTinySnapshot({ deviceId, raw });
+    saveLastSnapshot(snapshot);
+    return snapshot;
+  } catch (error) {
+    clearLastSnapshot(deviceId);
+    throw error;
+  }
 }
 
 /**
@@ -928,7 +1079,7 @@ async function captureTinySnapshotResilient(
   try {
     return await getTinySnapshot(tiny);
   } catch (err) {
-    if (!connection.adb.serial) throw err;
+    if (!connection.adb?.serial) throw err;
     return await restartTinyIfDownThenSnapshot(connection, tiny, err);
   }
 }
@@ -950,8 +1101,9 @@ async function restartTinyIfDownThenSnapshot(
     return await getTinySnapshot(tiny);
   } catch {
     // Tiny is unreachable on both /snapshot and /status — actually down.
-    if (!connection.adb.serial) throw originalErr;
-    const restarted = await startTinyHelper({ serial: connection.adb.serial });
+    const serial = connection.adb?.serial;
+    if (!serial) throw originalErr;
+    const restarted = await startTinyHelper({ serial });
     saveConnection({ ...connection, tiny: restarted });
     return await getTinySnapshot(restarted);
   }
@@ -1052,13 +1204,7 @@ function chunkNextOffset(value: Record<string, unknown>): number | null {
 }
 
 function tinyStatusSupportsAgentShape(status: Record<string, unknown>): boolean {
-  const capabilities = status.capabilities;
-  return Boolean(
-    capabilities &&
-      typeof capabilities === "object" &&
-      (capabilities as Record<string, unknown>).observe === true &&
-      (capabilities as Record<string, unknown>).responseChunks === true
-  );
+  return tinySupportsRequiredAgentShape(status);
 }
 
 function isTransientTinyRequestError(error: unknown): boolean {
@@ -1284,7 +1430,8 @@ async function snapshotRaw(input: {
   onProgress?: (message: string) => void;
   relay: Transport | null;
 }): Promise<Record<string, unknown>> {
-  if (input.connection.tiny || input.connection.adb.serial) {
+  const serial = input.connection.adb?.serial;
+  if (input.connection.tiny || serial) {
     let tiny: TinyState | undefined;
     try {
       tiny = await ensureTinyState(input.connection);
@@ -1294,7 +1441,7 @@ async function snapshotRaw(input: {
       // /status), then retry — a transient fetch error must not trigger the
       // disruptive force-stop+restart that startTinyHelper performs. Falls back
       // to the device transport only if recovery also fails. (R7)
-      if (input.connection.adb.serial && tiny) {
+      if (serial && tiny) {
         try {
           return await restartTinyIfDownThenSnapshot(input.connection, tiny, error);
         } catch (restartError) {
@@ -1394,9 +1541,9 @@ Caveats:
   See \`handheld guide selectors\` for selector matching rules.`
     )
     .action(async (target: string, y: string | undefined, opts) => {
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
-        const point = tapTargetFromArgs({ deviceId, target, y });
+        const point = await tapTargetFromArgs({ adb, connection, deviceId, relay, target, y });
         await settleCommandResult(
           program,
           connection,
@@ -1441,9 +1588,9 @@ Caveat: @eN refs (and bare indices) renumber on every screen change — re-snap
 or use an id=/label= selector. Prefer \`handheld tap\`.`
     )
     .action(async (target: string, y: string | undefined) => {
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
-        const point = tapTargetFromArgs({ allowBareIndex: true, deviceId, target, y });
+        const point = await tapTargetFromArgs({ allowBareIndex: true, adb, connection, deviceId, relay, target, y });
         await settleCommandResult(
           program,
           connection,
@@ -1476,7 +1623,7 @@ Caveat: coordinates are brittle across layouts/resolutions — prefer
 \`handheld tap @eN\` / a selector when a snapshot ref exists.`
     )
     .action(async (x: string, y: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -1507,7 +1654,7 @@ shown by \`handheld snap --bounds\`).
 Caveat: coordinates are brittle — prefer a snapshot ref/selector when one exists.`
     )
     .action(async (x1: string, y1: string, x2: string, y2: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       const point = {
         x: Math.round((Number(x1) + Number(x2)) / 2),
         y: Math.round((Number(y1) + Number(y2)) / 2),
@@ -1549,9 +1696,9 @@ Caveats:
   - A bare numeric index (e.g. \`long-press 12\`) is treated as @e12.`
     )
     .action(async (target: string, y: string | undefined, opts) => {
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
-        const point = tapTargetFromArgs({ allowBareIndex: true, deviceId, target, y });
+        const point = await tapTargetFromArgs({ allowBareIndex: true, adb, connection, deviceId, relay, target, y });
         await settleCommandResult(
           program,
           connection,
@@ -1602,9 +1749,9 @@ Caveats:
   - A bare numeric index (e.g. \`double-tap 9\`) is treated as @e9.`
     )
     .action(async (target: string, y: string | undefined, opts) => {
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
-        const point = tapTargetFromArgs({ allowBareIndex: true, deviceId, target, y });
+        const point = await tapTargetFromArgs({ allowBareIndex: true, adb, connection, deviceId, relay, target, y });
         await settleCommandResult(
           program,
           connection,
@@ -1642,7 +1789,7 @@ Caveats:
   - A longer --duration reads more like a finger; very short swipes can fling.`
     )
     .action(async (x1: string, y1: string, x2: string, y2: string, opts) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -1731,7 +1878,7 @@ Caveats:
         );
         process.exit(1);
       }
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -1752,6 +1899,7 @@ Caveats:
               // Default to replacing the field (deterministic via Tiny
               // setText); --append opts into key-injection append.
               clear: opts.append ? false : true,
+              connection,
               deviceId,
               relay,
               submit: opts.submit,
@@ -1787,7 +1935,7 @@ Caveats:
     )
     .action(async (target: string, textParts: string[], opts) => {
       const text = textParts.join(" ");
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -1797,6 +1945,7 @@ Caveats:
               adb,
               append: opts.append,
               clear: true,
+              connection,
               deviceId,
               relay,
               submit: opts.submit,
@@ -1829,7 +1978,7 @@ Caveats:
   - --repeat is the number of delete presses; raise it for very long fields.`
     )
     .action(async (target: string | undefined, opts) => {
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -1846,9 +1995,12 @@ Caveats:
                 };
               }
             } else {
-              const point = tapTargetFromArgs({
+              const point = await tapTargetFromArgs({
                 allowBareIndex: true,
+                adb,
+                connection,
                 deviceId,
+                relay,
                 target: target!,
               });
               assertOk(
@@ -1888,7 +2040,7 @@ keyCodeFromString is case-sensitive). Prefer \`handheld press-key\` (same behavi
 visible in --help) or the \`back\`/\`home\`/\`recent\` shortcuts.`
     )
     .action(async (key: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const beforeAction = await beginActionWait(
           connection,
@@ -1919,7 +2071,7 @@ Caveat: thin wrapper over the key path. Prefer the dedicated shortcuts
 \`handheld back\` / \`home\` / \`recent\`, which are visible in \`handheld --help\`.`
     )
     .action(async (button: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -1948,7 +2100,7 @@ Caveat: thin wrapper over the key path. Prefer the dedicated shortcuts
 Caveat: takes a number only — for names use \`handheld press-key <name>\`.`
     )
     .action(async (keycode: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -1981,7 +2133,7 @@ keyCodeFromString is case-sensitive). For Enter after typing, prefer
 \`handheld type … --submit\`; for navigation use \`back\` / \`home\` / \`recent\`.`
     )
     .action(async (key: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -2044,7 +2196,7 @@ to switch apps reliably, then re-snap.`,
       .description(name === "menu" ? "open recent apps (Android app switcher)" : `press ${key}`)
       .addHelpText("after", navHelp[name]!)
       .action(async () => {
-        const { relay, adb, connection } = getTransport(program);
+        const { relay, adb, connection } = await getTransport(program);
         try {
           await settleCommandResult(
             program,
@@ -2149,7 +2301,7 @@ Caveats:
   - --base64 and \`--json\` both emit base64 to stdout (no file written).`
     )
     .action(async (opts) => {
-      const ctx = getTransport(program);
+      const ctx = await getTransport(program);
       try {
         const shot = await captureScreenshot(ctx, {
           format: opts.format,
@@ -2186,6 +2338,7 @@ Caveats:
     .option("--all", "include structural containers + off-screen nodes (full tree)")
     .option("--offscreen", "include off-screen nodes (skip viewport culling)")
     .option("--bounds", "include node bounds")
+    .option("--agent", "print compact agent-loop JSON (action refs, selectors, actions, minimal state)")
     .option("--no-header", "omit snapshot header")
     .option("--raw", "print raw Tiny snapshot JSON")
     .option("--screenshot", "include a screenshot with the snapshot")
@@ -2204,6 +2357,7 @@ Views:
   handheld snap -i           # only actionable refs (no read-only text)
   handheld snap --all        # full uncollapsed tree incl. off-screen + keyboard keys
   handheld snap --offscreen  # keep below-the-fold nodes (still collapsed)
+  handheld snap --agent      # compact agent-loop JSON
   handheld snap --raw        # raw Tiny snapshot JSON (every field, never culled)
   handheld snap --json       # structured node list (--json is a global flag)
   handheld snap --screenshot # also capture a JPEG alongside the tree
@@ -2217,7 +2371,7 @@ Caveats:
     durable handles use id=/label=/text= selectors (\`handheld guide selectors\`).`
     )
     .action(async (opts) => {
-      const { connection, deviceId, relay, adb } = getTransport(program);
+      const { connection, deviceId, relay, adb } = await getTransport(program);
       try {
         const raw = await snapshotRaw({
           adb,
@@ -2229,7 +2383,13 @@ Caveats:
             : (message: string) => console.error(message),
           relay,
         });
-        const snapshot = normalizeTinySnapshot({ deviceId, raw });
+        let snapshot: SnapshotDocument;
+        try {
+          snapshot = normalizeTinySnapshot({ deviceId, raw });
+        } catch (error) {
+          clearLastSnapshot(deviceId);
+          throw error;
+        }
         // Current Tiny folds the foreground activity into the snapshot itself
         // (on-device, no round-trip). Only fall back to a host dumpsys for an
         // older Tiny that didn't provide it.
@@ -2243,6 +2403,10 @@ Caveats:
 
         if (opts.raw) {
           console.log(JSON.stringify(raw, null, 2));
+          return;
+        }
+        if (opts.agent) {
+          console.log(JSON.stringify(snapshotForAgent(snapshot), null, 2));
           return;
         }
         if (program.opts().json) {
@@ -2314,7 +2478,7 @@ Caveats:
     on cloud devices. A non-zero device exit surfaces as a failure.`
     )
     .action(async (command: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const beforeAction = await beginActionWait(
           connection,
@@ -2389,7 +2553,7 @@ Caveats:
     before the action you want to detect.`
     )
     .action(async (condition: string, value: string | undefined, opts) => {
-      const { connection, deviceId } = getTransport(program);
+      const { connection, deviceId } = await getTransport(program);
       const normalized = condition.toLowerCase();
       if (!["stable", "text", "ref", "change"].includes(normalized)) {
         console.error(`Unknown wait-for condition "${condition}".`);
@@ -2462,7 +2626,7 @@ Caveats:
         console.error("Hint: use one of: up | down | left | right.");
         process.exit(1);
       }
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const sizeResult = await runShell(relay, adb, screenSizeCommand());
         assertOk(sizeResult, "Screen size failed");
@@ -2504,7 +2668,7 @@ Caveat: --system is a long list; filter with \`grep\` (e.g. \`handheld list-apps
 --system | grep chrome\`).`
     )
     .action(async (opts) => {
-      const { relay, adb } = getTransport(program);
+      const { relay, adb } = await getTransport(program);
       try {
         const { activities, packages } = await listPackagesAndActivities(
           relay,
@@ -2550,7 +2714,7 @@ Caveats:
     switcher animates and may not settle. Re-snap after the app opens.`
     )
     .action(async (nameOrPackage: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const app = await resolveInstalledApp(relay, adb, nameOrPackage);
         if (!app) {
@@ -2601,7 +2765,7 @@ Caveats:
   - Re-snap after launch; the screen (and refs) changed.`
     )
     .action(async (target: string | undefined, opts) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const command = launchTargetCommand({
           action: opts.action,
@@ -2644,7 +2808,7 @@ Note: \`handheld snap\` already shows the foreground app/activity in its header,
 so a separate call is rarely needed.`
     )
     .action(async () => {
-      const { relay, adb } = getTransport(program);
+      const { relay, adb } = await getTransport(program);
       try {
         const result = await runShell(relay, adb, currentAppCommand());
         const current = result.ok && typeof result.data === "string"
@@ -2681,7 +2845,7 @@ Caveat: force-stops the process (like Settings > Force stop). Re-snap afterward;
 the foreground app likely changed.`
     )
     .action(async (nameOrPackage: string) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const app = await resolveInstalledApp(relay, adb, nameOrPackage);
         if (!app) {
@@ -2716,7 +2880,7 @@ Caveats:
     devices honor it.`
     )
     .action(async (lat: string, lon: string) => {
-      const { relay, adb } = getTransport(program);
+      const { relay, adb } = await getTransport(program);
       try {
         const transport = pickTransport("gps", relay, adb);
         const result = await transport.gps(Number(lat), Number(lon));
@@ -2747,7 +2911,7 @@ Caveats:
         console.error('Hint: use `handheld clipboard get` or `handheld clipboard set "<text>"`.');
         process.exit(1);
       }
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const result =
           action === "set"
@@ -2782,7 +2946,7 @@ Caveats:
     )
     .action(async (textParts: string[]) => {
       const text = textParts.join(" ");
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         outputResult(
           program,
@@ -2811,7 +2975,7 @@ Caveats:
   - @eN refs renumber on every screen change — re-snap or use a durable selector.`
     )
     .action(async (target: string | undefined) => {
-      const { relay, adb, connection, deviceId } = getTransport(program);
+      const { relay, adb, connection, deviceId } = await getTransport(program);
       try {
         await settleCommandResult(
           program,
@@ -2823,11 +2987,68 @@ Caveats:
                 error: "No input field is focused — tap a field first or pass a target ref.",
               };
             }
-            await focusTarget({ adb, deviceId, relay, target });
+            await focusTarget({ adb, connection, deviceId, relay, target });
             return await pasteClipboardText({ adb, relay });
           },
           "Paste failed"
         );
+      } finally {
+        await disconnectRelay(relay);
+      }
+    });
+
+  program
+    .command("push <localFile> [remotePath]")
+    .description("push a local file to the device (ADB fast path, Gateway session upload for relay-only cloud)")
+    .option("--chmod <mode>", "chmod uploaded file after push")
+    .addHelpText(
+      "after",
+      `
+  handheld push ./data.bin
+  handheld push ./data.bin /sdcard/Download/data.bin --chmod 644
+
+Caveats:
+  - Local ADB connections use \`adb push\` directly.
+  - Relay-only cloud connections use the Gateway session upload route.
+  - If you need to read a file back, \`pull\` currently requires ADB.`
+    )
+    .action(async (localFile: string, remotePath: string | undefined, opts) => {
+      const { adb, connection, deviceId, relay } = await getTransport(program);
+      const destination = remotePath ?? `/sdcard/Download/${basename(localFile)}`;
+      try {
+        if (adb) {
+          const result = await adb.push(localFile, destination);
+          if (program.opts().json) {
+            console.log(JSON.stringify({ ...result, path: destination }));
+          } else if (!result.ok) {
+            console.error("Push failed:", result.error);
+            console.error(
+              "Hint: check the local file exists and the remote destination is writable."
+            );
+            process.exitCode = 1;
+          } else {
+            console.log(`Pushed to ${destination}`);
+          }
+          return;
+        }
+
+        const api = new HandheldApiClient();
+        const result = await uploadSessionFile({
+          api,
+          chmod: opts.chmod,
+          customizeFilePath: destination,
+          deviceId,
+          localFile,
+          sessionId: connection.sessionId,
+        });
+        if (program.opts().json) console.log(JSON.stringify(result));
+        else console.log(`Pushed to ${result.path ?? destination}`);
+      } catch (err) {
+        console.error("Push failed:", (err as Error).message);
+        console.error(
+          "Hint: use a readable local file and a writable remote path. Relay-only cloud push needs an active Gateway session; local push needs ADB."
+        );
+        process.exit(1);
       } finally {
         await disconnectRelay(relay);
       }
@@ -2846,7 +3067,7 @@ Caveat: ADB-only — not available on relay-only (cloud) connections. Connect wi
 \`handheld connect --local\` for a device that supports it.`
     )
     .action(async (remote: string, local?: string) => {
-      const { adb } = getTransport(program);
+      const { adb } = await getTransport(program);
       if (!adb) {
         console.error("Pull requires an ADB transport, which this connection doesn't have.");
         console.error(
@@ -2896,7 +3117,7 @@ Caveats:
   - The first snapshot after a fresh install can take up to ~30s.`
     )
     .action(async (opts) => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const tiny = await ensureDeviceTiny({
           adb,
@@ -2934,7 +3155,7 @@ Caveat: installs only — run \`handheld tiny start\` afterward, or just use
 \`handheld tiny bootstrap\`, which installs AND starts in one step.`
     )
     .action(async () => {
-      const { relay, adb, connection } = getTransport(program);
+      const { relay, adb, connection } = await getTransport(program);
       try {
         const api = new HandheldApiClient();
         const upload = await uploadSessionFile({
@@ -2976,7 +3197,7 @@ Caveat: assumes the APK is already installed (\`handheld tiny install\` first), 
 just use \`handheld tiny bootstrap\` to install + start together.`
     )
     .action(async () => {
-      const { relay, adb } = getTransport(program);
+      const { relay, adb } = await getTransport(program);
       try {
         const tiny = ensureTinyToken();
         await runShellString(
@@ -3021,7 +3242,7 @@ Caveats:
     )
     .action(async (localFile: string, remotePath: string | undefined, opts) => {
       try {
-        const { connection, deviceId } = getTransport(program);
+        const { connection, deviceId } = await getTransport(program);
         const api = new HandheldApiClient();
         const result = await uploadSessionFile({
           api,
@@ -3060,7 +3281,7 @@ Gateway session. A URL is fetched and installed server-side via the session.`
     )
     .action(async (source: string) => {
       if (source.startsWith("http://") || source.startsWith("https://")) {
-        const { deviceId } = getTransport(program);
+        const { deviceId } = await getTransport(program);
         const api = new HandheldApiClient();
         const fileName = source.split("/").pop() ?? "app.apk";
         const result = await api.uploadUrl(deviceId, {
@@ -3071,7 +3292,7 @@ Gateway session. A URL is fetched and installed server-side via the session.`
         if (program.opts().json) console.log(JSON.stringify(result));
         else console.log("Install task submitted:", result.taskId ?? "ok");
       } else {
-        const { adb, connection, deviceId } = getTransport(program);
+        const { adb, connection, deviceId } = await getTransport(program);
         if (adb) {
           const result = await adb.install(source);
           if (program.opts().json) console.log(JSON.stringify(result));

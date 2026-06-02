@@ -68,7 +68,7 @@ final class SetTextService {
           .withSupportedModes(supportedModes);
     }
     String normalizedMode = semanticMode ? "semantic" : "paste";
-    String text = first(params, "text", "value");
+    String text = firstRaw(params, "text", "value");
     if (text == null) {
       return SetTextResult.failure("missing_text", "setText requires text or value").withMode(normalizedMode);
     }
@@ -235,9 +235,9 @@ final class SetTextService {
     if (body == null || body.trim().isEmpty()) {
       return new HashMap<>();
     }
-    String trimmed = body.trim();
-    if (trimmed.startsWith("{")) {
-      JSONObject json = new JSONObject(trimmed);
+    String jsonCandidate = body.trim();
+    if (jsonCandidate.startsWith("{")) {
+      JSONObject json = new JSONObject(jsonCandidate);
       HashMap<String, String> result = new HashMap<>();
       Iterator<String> keys = json.keys();
       while (keys.hasNext()) {
@@ -248,7 +248,7 @@ final class SetTextService {
       return result;
     }
     HashMap<String, String> result = new HashMap<>();
-    String[] parts = trimmed.split("&");
+    String[] parts = body.split("&", -1);
     for (String part : parts) {
       int equals = part.indexOf('=');
       String key = equals >= 0 ? part.substring(0, equals) : part;
@@ -260,6 +260,12 @@ final class SetTextService {
 
   private static String first(Map<String, String> params, String primary, String alias) {
     return SnapshotService.first(params, primary, alias);
+  }
+
+  private static String firstRaw(Map<String, String> params, String primary, String alias) {
+    if (params.containsKey(primary)) return params.get(primary);
+    if (alias != null && params.containsKey(alias)) return params.get(alias);
+    return null;
   }
 
   private static final class SetTextResult {

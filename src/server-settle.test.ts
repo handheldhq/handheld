@@ -7,10 +7,21 @@ const conn = { deviceId: "d" } as unknown as Connection;
 const gesture = { type: "tap", x: 1, y: 1 } as unknown as TinyInputOptions;
 
 describe("tryServerSettle — sent-but-unsettled handling (H3)", () => {
-  it("reports a post-send abort/timeout as success+settleInconclusive (no double-fire)", async () => {
+  it("does not report an unacknowledged abort/timeout as settleInconclusive", async () => {
     const abort = async (): Promise<Record<string, unknown>> => {
       const err = new Error("This operation was aborted");
       err.name = "AbortError";
+      throw err;
+    };
+    expect(await tryServerSettle(conn, gesture, { enabled: true }, abort)).toBeNull();
+  });
+
+  it("reports a confirmed post-inject abort/timeout as success+settleInconclusive (no double-fire)", async () => {
+    const abort = async (): Promise<Record<string, unknown>> => {
+      const err = Object.assign(new Error("This operation was aborted"), {
+        injected: true,
+        name: "AbortError",
+      });
       throw err;
     };
     const res = await tryServerSettle(conn, gesture, { enabled: true }, abort);

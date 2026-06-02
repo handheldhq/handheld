@@ -209,7 +209,7 @@ export function getActiveConnection(): Connection | undefined {
   const config = getConfig();
   const connections = getConnections();
   if (config.defaultDevice) {
-    return connections.find((c) => c.deviceId === config.defaultDevice) ?? connections[0];
+    return connections.find((c) => c.deviceId === config.defaultDevice);
   }
   return connections[0];
 }

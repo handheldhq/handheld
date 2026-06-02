@@ -9,6 +9,7 @@ dist/
 android/tiny-snapshot-helper-v2-build/
 
 # local runtime state
+.handheld/
 .mu/
 .turbo/
 

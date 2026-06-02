@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type ToolAnnotations,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   type CreateDeviceInput,
@@ -48,12 +49,14 @@ import {
   bundledTinyApkPath,
   ensureTinyToken,
   getTinySnapshot,
+  getTinySignature,
   startTinyHelper,
   tinyDeviceInstallCommand,
   tinyDeviceRequestCommand,
   tinyDeviceStartCommand,
   type TinyInputOptions,
   tinyInputBody,
+  tinySignaturePath,
   tinySetTextBody,
   tinyWaitForChangePath,
   tinyWaitForStablePath,
@@ -62,10 +65,16 @@ import {
 import { tryServerSettle, type TinyInputSender } from "../server-settle.js";
 import { hasFocusedEditableField, typeViaTinySetText } from "../text-entry.js";
 import {
+  clearLastSnapshot,
+  compareForegroundSignatures,
+  foregroundSignatureOf,
   loadLastSnapshot,
   normalizeTinySnapshot,
   saveLastSnapshot,
+  snapshotForAgent,
   snapshotNodesForDisplay,
+  type SnapshotDocument,
+  type SnapshotForegroundSignature,
 } from "../snapshot.js";
 import {
   amStartError,
@@ -73,6 +82,7 @@ import {
   currentAppCommand,
   launchTargetCommand,
   launcherActivitiesCommand,
+  isSnapshotTarget,
   normalizeKeyInput,
   packageListCommand,
   parseCurrentComponent,
@@ -90,6 +100,19 @@ import {
 type McpTransportResult =
   | CommandResult
   | (ScreenshotResult & { error?: string });
+
+type McpToolCategory = "core" | "operator" | "compatibility";
+type McpTool = {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  annotations?: ToolAnnotations;
+  _meta?: Record<string, unknown>;
+};
 
 const TOOLS = [
   {
@@ -421,7 +444,7 @@ const TOOLS = [
     description:
       "Read the actionable UI snapshot for the connected device. Returns the compact, " +
       "on-screen tree (structural containers collapsed) plus a totalNodeCount. " +
-      "Re-snap after every action: refs renumber on each screen change. " +
+      "Re-snap after every action: cached refs/selectors are checked against Tiny's live foreground/digest and stale targets refuse before input. " +
       "Line grammar: `{indent}{bullet} @eN Role \"title\" subtitle=\"…\" = \"value\" [id=… focused disabled checked actions=[…]]`. " +
       "bullet `-`, or `▶` when focused. @eN = actionable ref (pass to tap/type/…); read-only Text has NO ref (visible to read, not a target). " +
       "Role is TitleCase (Button, TextField, Text, ScrollView, List, CheckBox, Switch, Image…). " +
@@ -444,6 +467,11 @@ const TOOLS = [
           type: "boolean",
           description:
             "Include the complete unprocessed Tiny snapshot under `raw` (every field, never culled) alongside the normalized nodes.",
+        },
+        agent: {
+          type: "boolean",
+          description:
+            "Return a compact agent-loop projection with refs, labels, ids, actions, and minimal state instead of the default snapshot shape.",
         },
         screenshot: {
           type: "boolean",
@@ -865,9 +893,9 @@ const TOOLS = [
       },
     },
   },
-];
+] satisfies McpTool[];
 
-const CORE_MCP_TOOL_NAMES = new Set([
+export const CORE_MCP_TOOL_NAMES = new Set([
   "devices",
   "create_device",
   "connect",
@@ -891,9 +919,104 @@ const CORE_MCP_TOOL_NAMES = new Set([
   "teach_request",
 ]);
 
-function listVisibleTools(): typeof TOOLS {
-  if (process.env.HANDHELD_MCP_FULL === "1") return TOOLS;
-  return TOOLS.filter((tool) => CORE_MCP_TOOL_NAMES.has(tool.name));
+const READ_ONLY_MCP_TOOL_NAMES = new Set([
+  "devices",
+  "proxies",
+  "proxy_get",
+  "proxy_links",
+  "proxy_groups",
+  "profiles",
+  "profile_get",
+  "profile_snapshots",
+  "profile_job",
+  "billing_balance",
+  "billing_usage_state",
+  "billing_transactions",
+  "billing_spend_summary",
+  "snap",
+  "wait",
+  "wait_for",
+  "list_apps",
+  "current_app",
+  "screenshot",
+]);
+
+const DESTRUCTIVE_MCP_TOOL_NAMES = new Set([
+  "proxy_delete",
+  "proxy_group_delete",
+  "profile_delete",
+  "profile_restore",
+  "profile_reboot",
+  "disconnect",
+  "stop_app",
+  "shell",
+]);
+
+const IDEMPOTENT_MUTATION_MCP_TOOL_NAMES = new Set([
+  "connect",
+  "copy",
+  "home",
+  "wait",
+  "wait_for",
+  "stop_app",
+]);
+
+const COMPATIBILITY_MCP_TOOL_NAMES = new Set([
+  "click",
+  "click_at",
+  "click_area",
+  "fill",
+  "key",
+  "keycode",
+  "system_button",
+  "clipboard",
+  "wait",
+  "wait_for",
+  "current_app",
+  "stop_app",
+]);
+
+function toolCategory(name: string): McpToolCategory {
+  if (CORE_MCP_TOOL_NAMES.has(name)) return "core";
+  if (COMPATIBILITY_MCP_TOOL_NAMES.has(name)) return "compatibility";
+  return "operator";
+}
+
+function toolAnnotations(name: string): ToolAnnotations {
+  const readOnly = READ_ONLY_MCP_TOOL_NAMES.has(name);
+  return {
+    readOnlyHint: readOnly,
+    destructiveHint: readOnly ? false : DESTRUCTIVE_MCP_TOOL_NAMES.has(name),
+    idempotentHint: readOnly || IDEMPOTENT_MUTATION_MCP_TOOL_NAMES.has(name),
+    openWorldHint: true,
+  };
+}
+
+function decorateTool(tool: McpTool): McpTool {
+  const category = toolCategory(tool.name);
+  return {
+    ...tool,
+    annotations: {
+      ...toolAnnotations(tool.name),
+      ...tool.annotations,
+    },
+    _meta: {
+      ...tool._meta,
+      "handheld/category": category,
+      "handheld/default": CORE_MCP_TOOL_NAMES.has(tool.name),
+    },
+  };
+}
+
+export function listVisibleTools(): McpTool[] {
+  const allTools = TOOLS as readonly McpTool[];
+  const toolsByName = new Map(allTools.map((tool) => [tool.name, tool]));
+  const tools = process.env.HANDHELD_MCP_FULL === "1"
+    ? allTools
+    : [...CORE_MCP_TOOL_NAMES]
+        .map((name) => toolsByName.get(name))
+        .filter((tool): tool is McpTool => tool !== undefined);
+  return tools.map(decorateTool);
 }
 
 function jsonContent(value: unknown) {
@@ -969,7 +1092,8 @@ function getTransport(deviceId?: string): {
     relayState.connected && relayState.relayUrl
       ? new RelayClient(relayState.relayUrl, getAuthorizationHeaders())
       : null;
-  const adb = conn.adb.serial ? new AdbTransport(conn.adb.serial) : null;
+  const adbSerial = conn.adb?.serial;
+  const adb = adbSerial ? new AdbTransport(adbSerial) : null;
 
   // Stash the live transports so the settle helpers can build a device-shell
   // TinyReader/sender for the relay path without threading relay/adb through
@@ -1222,23 +1346,140 @@ async function waitForMcpSnapshotCondition(input: {
 
 async function ensureTinyState(connection: Connection): Promise<TinyState> {
   if (connection.tiny) return connection.tiny;
-  if (!connection.adb.serial) {
+  const serial = connection.adb?.serial;
+  if (!serial) {
     throw new Error("Snapshot requires Tiny helper or ADB. Reconnect with ADB enabled.");
   }
-  const tiny = await startTinyHelper({ serial: connection.adb.serial });
+  const tiny = await startTinyHelper({ serial });
   saveConnection({ ...connection, tiny });
   return tiny;
 }
 
-function mcpPointFromArgs(
+function mcpFieldString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function mcpFieldNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function mcpSignatureFromRaw(raw: Record<string, unknown>): SnapshotForegroundSignature {
+  return {
+    activity: mcpFieldString(raw.activity),
+    bundleId: mcpFieldString(raw.bundleId),
+    component: mcpFieldString(raw.component),
+    eventSeq: mcpFieldNumber(raw.eventSeq),
+    layoutDigest: mcpFieldString(raw.layoutDigest),
+  };
+}
+
+async function mcpLiveForegroundSignature(input: {
+  adb: AdbTransport | null;
+  conn: Connection;
+  previousEventSeq?: number;
+  relay: RelayClient | null;
+}): Promise<SnapshotForegroundSignature> {
+  let signature: SnapshotForegroundSignature;
+  if (input.conn.tiny) {
+    signature = mcpSignatureFromRaw(
+      await getTinySignature(input.conn.tiny, {
+        previousEventSeq: input.previousEventSeq,
+      }) as Record<string, unknown>
+    );
+    return await completeMcpLiveForegroundSignature(signature, input.relay, input.adb);
+  }
+
+  if (input.conn.adb?.serial) {
+    const tiny = await ensureTinyState(input.conn);
+    signature = mcpSignatureFromRaw(
+      await getTinySignature(tiny, { previousEventSeq: input.previousEventSeq }) as Record<string, unknown>
+    );
+    return await completeMcpLiveForegroundSignature(signature, input.relay, input.adb);
+  }
+
+  const tokenState = await ensureMcpDeviceTiny({
+    adb: input.adb,
+    api: () => new HandheldApiClient(),
+    conn: input.conn,
+    relay: input.relay,
+  });
+  signature = mcpSignatureFromRaw(
+    await readMcpTinyJsonFromDevice({
+      adb: input.adb,
+      path: tinySignaturePath({ previousEventSeq: input.previousEventSeq }),
+      relay: input.relay,
+      token: tokenState.token,
+    })
+  );
+  return await completeMcpLiveForegroundSignature(signature, input.relay, input.adb);
+}
+
+async function completeMcpLiveForegroundSignature(
+  signature: SnapshotForegroundSignature,
+  relay: RelayClient | null,
+  adb: AdbTransport | null
+): Promise<SnapshotForegroundSignature> {
+  if (signature.component) return signature;
+  try {
+    const focus = await runMcpShell(relay, adb, currentAppCommand());
+    if (!focus.ok || typeof focus.data !== "string") return signature;
+    const current = parseCurrentComponent(focus.data);
+    return {
+      ...signature,
+      activity: signature.activity ?? current.activity ?? undefined,
+      component: signature.component ?? current.component ?? undefined,
+    };
+  } catch {
+    return signature;
+  }
+}
+
+async function assertMcpCachedSnapshotFresh(input: {
+  adb: AdbTransport | null;
+  conn: Connection;
+  relay: RelayClient | null;
+  snapshot: SnapshotDocument;
+  target: string;
+}): Promise<void> {
+  const cached = input.snapshot.foregroundSignature ?? foregroundSignatureOf(input.snapshot);
+  let live: SnapshotForegroundSignature;
+  try {
+    live = await mcpLiveForegroundSignature({
+      adb: input.adb,
+      conn: input.conn,
+      previousEventSeq: cached.eventSeq,
+      relay: input.relay,
+    });
+  } catch (error) {
+    throw new Error(
+      `Cached snapshot target "${input.target}" cannot be verified: ${error instanceof Error ? error.message : String(error)}. Call snap again before using cached refs/selectors.`
+    );
+  }
+  const comparison = compareForegroundSignatures({ cached, live });
+  if (!comparison.ok) {
+    throw new Error(
+      `Cached snapshot target "${input.target}" is stale: ${comparison.reason ?? "screen changed since last snap"}. Call snap again before using cached refs/selectors.`
+    );
+  }
+}
+
+async function mcpPointFromArgs(
   args: Record<string, unknown> | undefined,
-  conn: Connection
-): { x: number; y: number } {
+  conn: Connection,
+  transports: { adb: AdbTransport | null; relay: RelayClient | null }
+): Promise<{ x: number; y: number }> {
   if (typeof args?.target === "string" && args.target.trim()) {
     const snapshot = loadLastSnapshot(conn.deviceId);
     if (!snapshot) {
       throw new Error("No cached snapshot — call snap first, then pass a ref or id=/label= selector from it.");
     }
+    await assertMcpCachedSnapshotFresh({
+      adb: transports.adb,
+      conn,
+      relay: transports.relay,
+      snapshot,
+      target: args.target,
+    });
     const point = pointFromSnapshotTarget(snapshot, args.target);
     if (!point) {
       throw new Error(
@@ -1262,7 +1503,10 @@ async function focusMcpTarget(input: {
 }): Promise<void> {
   const target = input.target ?? optionalString(input.args, "target");
   if (!target || target === "focused" || target === "-") return;
-  const point = mcpPointFromArgs({ target }, input.conn);
+  const point = await mcpPointFromArgs({ target }, input.conn, {
+    adb: input.adb,
+    relay: input.relay,
+  });
   requireOk(
     await runWithAdbFallback("tap", input.relay, input.adb, (transport) =>
       transport.tap(point)
@@ -1286,6 +1530,18 @@ async function focusClearAndTypeMcp(input: {
   // Prefer Tiny over racy key injection — see typeViaTinySetText. Replace uses
   // semantic ACTION_SET_TEXT; append uses paste mode (clipboard + ACTION_PASTE).
   if (input.conn.tiny) {
+    if (target && isSnapshotTarget(target)) {
+      const snapshot = loadLastSnapshot(input.conn.deviceId);
+      if (snapshot) {
+        await assertMcpCachedSnapshotFresh({
+          adb: input.adb,
+          conn: input.conn,
+          relay: input.relay,
+          snapshot,
+          target,
+        });
+      }
+    }
     const viaTiny = await typeViaTinySetText({
       append,
       deviceId: input.conn.deviceId,
@@ -1665,7 +1921,7 @@ async function readMcpSnapshotRaw(input: {
   conn: Connection;
   relay: RelayClient | null;
 }): Promise<Record<string, unknown>> {
-  if (input.conn.tiny || input.conn.adb.serial) {
+  if (input.conn.tiny || input.conn.adb?.serial) {
     try {
       const tiny = await ensureTinyState(input.conn);
       return await getTinySnapshot(tiny);
@@ -2034,7 +2290,13 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
             conn,
             relay,
           });
-          const snapshot = normalizeTinySnapshot({ deviceId: conn.deviceId, raw });
+          let snapshot;
+          try {
+            snapshot = normalizeTinySnapshot({ deviceId: conn.deviceId, raw });
+          } catch (error) {
+            clearLastSnapshot(conn.deviceId);
+            throw error;
+          }
           // Current Tiny folds the foreground activity into the snapshot itself
           // (on-device); only fall back to a host dumpsys for an older Tiny.
           if (!snapshot.activity) {
@@ -2050,6 +2312,9 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
             }
           }
           saveLastSnapshot(snapshot);
+          if (args?.agent === true) {
+            return jsonContent(snapshotForAgent(snapshot));
+          }
           const screenshot = args?.screenshot === true
             ? await runWithAdbFallback("screenshot", relay, adb, (transport) =>
                 transport.screenshot()
@@ -2081,7 +2346,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         case "click":
         case "click_at": {
           if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
-          const point = mcpPointFromArgs(args, conn);
+          const point = await mcpPointFromArgs(args, conn, { adb, relay });
           const longPress = args?.longPress === true;
           return mcpTextResult(
             await settleMcpGesture(
@@ -2111,7 +2376,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
 
         case "long_press": {
           if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
-          const point = mcpPointFromArgs(args, conn);
+          const point = await mcpPointFromArgs(args, conn, { adb, relay });
           const duration = optionalNumber(args, "duration") ?? 1000;
           return mcpTextResult(
             await settleMcpGesture(
@@ -2127,7 +2392,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
 
         case "double_tap": {
           if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
-          const point = mcpPointFromArgs(args, conn);
+          const point = await mcpPointFromArgs(args, conn, { adb, relay });
           return mcpTextResult(
             await settleMcpGesture(
               conn,
@@ -2166,7 +2431,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
           const beforeAction = await beginMcpActionWait(conn, args);
           const target = optionalString(args, "target");
           if (target && target !== "focused" && target !== "-") {
-            const point = mcpPointFromArgs({ target }, conn);
+            const point = await mcpPointFromArgs({ target }, conn, { adb, relay });
             requireOk(
               await runWithAdbFallback("tap", relay, adb, (transport) => transport.tap(point)),
               "Focus target failed"

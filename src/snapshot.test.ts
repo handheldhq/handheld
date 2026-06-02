@@ -1,18 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalForegroundComponent,
+  compareForegroundSignatures,
+  foregroundSignatureOf,
   formatSnapshot,
   nodeCenter,
   normalizeTinySnapshot,
   resolveSelector,
   resolveSnapshotRef,
+  snapshotForAgent,
   snapshotForOutput,
   snapshotNodesForDisplay,
 } from "./snapshot.js";
 
 const tinySnapshot = {
+  activity: "com.android.settings.Settings",
   appName: "Settings",
   bundleId: "com.android.settings",
+  component: "com.android.settings/com.android.settings.Settings",
   eventSeq: 42,
+  layoutDigest: "layout-1",
   treeDigest: "tree-1",
   nodes: [
     {
@@ -68,6 +75,50 @@ describe("Tiny snapshot formatting", () => {
       value: "",
     });
     expect(nodeCenter(snapshot.nodes[1]!)).toEqual({ x: 540, y: 180 });
+  });
+
+  it("persists and compares foreground signatures for stale ref guards", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: tinySnapshot,
+    });
+
+    expect(snapshot.foregroundSignature).toEqual({
+      activity: "com.android.settings.Settings",
+      bundleId: "com.android.settings",
+      component: "com.android.settings/com.android.settings.Settings",
+      eventSeq: 42,
+      layoutDigest: "layout-1",
+    });
+    expect(foregroundSignatureOf(snapshot)).toEqual(snapshot.foregroundSignature);
+    expect(
+      compareForegroundSignatures({
+        cached: snapshot.foregroundSignature,
+        live: {
+          component: "com.android.settings/.Settings",
+          eventSeq: 43,
+          layoutDigest: "layout-1",
+        },
+      })
+    ).toEqual({ ok: true });
+    expect(canonicalForegroundComponent("com.android.settings/.Settings")).toBe(
+      "com.android.settings/com.android.settings.Settings"
+    );
+    expect(
+      compareForegroundSignatures({
+        cached: snapshot.foregroundSignature,
+        live: {
+          component: "com.android.settings/com.android.settings.Settings",
+          layoutDigest: "layout-2",
+        },
+      })
+    ).toMatchObject({ ok: false, reason: "layout changed since last snap" });
+    expect(
+      compareForegroundSignatures({
+        cached: snapshot.foregroundSignature,
+        live: { layoutDigest: "layout-1" },
+      })
+    ).toMatchObject({ ok: false, reason: "missing live foreground signature" });
   });
 
   it("prints compact selectable refs", () => {
@@ -263,7 +314,7 @@ describe("Tiny snapshot formatting", () => {
     expect(snapshotForOutput(snapshot, { interactive: false }).nodes).toHaveLength(3);
 
     // The result is still formattable (header + filtered body).
-    expect(formatSnapshot(compact, { header: true })).toContain("Snapshot Settings");
+    expect(formatSnapshot(compact, { header: true })).toContain("Snapshot com.android.settings");
   });
 
   it("resolves cached refs with or without @ prefix", () => {
@@ -382,6 +433,66 @@ describe("Tiny snapshot formatting", () => {
     const text = formatSnapshot(snapshot, { header: false });
     expect(text).toContain('"Real"');
     expect(text).not.toMatch(/@e3\b/); // the zero-height button is culled
+  });
+
+  it("culls zero-width and nameless actionable phantoms from the default view", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        nodes: [
+          { role: "android.widget.FrameLayout", depth: 0, bounds: { left: 0, top: 0, right: 1080, bottom: 2400 } },
+          { role: "android.widget.Button", text: "Real", hittable: true, depth: 1, bounds: { left: 0, top: 100, right: 300, bottom: 180 } },
+          { role: "android.widget.Button", hittable: true, depth: 1, bounds: { left: 40, top: 200, right: 40, bottom: 280 } },
+          { role: "android.widget.Button", hittable: true, depth: 1, bounds: { left: 0, top: 300, right: 300, bottom: 380 } },
+        ],
+      },
+    });
+
+    const text = formatSnapshot(snapshot, { header: false });
+
+    expect(text).toContain('"Real"');
+    expect(text).not.toMatch(/@e3\b/);
+    expect(text).not.toMatch(/@e4\b/);
+    expect(formatSnapshot(snapshot, { all: true, header: false })).toMatch(/@e4\b/);
+  });
+
+  it("returns a compact agent projection without changing snapshot json output", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        appName: "Settings",
+        layoutDigest: "digest-1",
+        nodes: [
+          { role: "android.widget.FrameLayout", depth: 0, bounds: { left: 0, top: 0, right: 1080, bottom: 2400 } },
+          { role: "android.widget.EditText", editable: true, focused: true, resourceId: "com.app:id/search", text: "wifi", depth: 1, bounds: { left: 0, top: 100, right: 1000, bottom: 180 } },
+          { role: "android.widget.Button", hittable: true, text: "Save", depth: 1, bounds: { left: 0, top: 200, right: 300, bottom: 280 } },
+        ],
+      },
+    });
+
+    expect(snapshotForOutput(snapshot).nodes[0]).toHaveProperty("raw");
+    expect(snapshotForAgent(snapshot)).toMatchObject({
+      appName: "Settings",
+      deviceId: "device-1",
+      layoutDigest: "digest-1",
+      nodes: [
+        {
+          actions: ["set_value"],
+          id: "search",
+          label: "wifi",
+          ref: "@e2",
+          role: "TextField",
+          state: { focused: true },
+          value: "wifi",
+        },
+        {
+          actions: ["press"],
+          label: "Save",
+          ref: "@e3",
+          role: "Button",
+        },
+      ],
+    });
   });
 
   it("groups other-window nodes under a labeled divider", () => {

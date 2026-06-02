@@ -217,9 +217,10 @@ function discardLocalConnection(conn: Connection): void {
     tunnels.delete(conn.deviceId);
   }
 
-  if (conn.adb.serial) {
+  const adbSerial = conn.adb?.serial;
+  if (adbSerial) {
     try {
-      execAdb(["disconnect", conn.adb.serial]);
+      execAdb(["disconnect", adbSerial]);
     } catch {}
   }
 
@@ -334,18 +335,20 @@ export async function connectDevice(
         try {
           const status = await relay.getStatus();
           if (status.active) {
-            const hasAdb = !wantsAdb || !!existing.adb.serial;
+            const existingAdbSerial = existing.adb?.serial ?? "";
+            const existingAdbTunnelPort = existing.adb?.tunnelPort ?? 0;
+            const hasAdb = !wantsAdb || !!existingAdbSerial;
             const hasRelayDaemon =
               !wantsRelay ||
               process.platform === "win32" ||
               !!existing.relay?.socketPath;
             if (hasAdb && hasRelayDaemon) {
               let tinyState = existing.tiny;
-              if (existing.adb.serial && opts.startTiny !== false && !tinyState) {
+              if (existingAdbSerial && opts.startTiny !== false && !tinyState) {
                 try {
                   printConnectProgress(json, "Tiny helper... ");
                   tinyState = await startTinyHelper({
-                    serial: existing.adb.serial,
+                    serial: existingAdbSerial,
                   });
                   saveConnection({
                     ...existing,
@@ -365,8 +368,8 @@ export async function connectDevice(
               }
               return {
                 adb: {
-                  serial: existing.adb.serial,
-                  tunnelPort: existing.adb.tunnelPort,
+                  serial: existingAdbSerial,
+                  tunnelPort: existingAdbTunnelPort,
                 },
                 deviceId: resolvedDevice,
                 relay: {

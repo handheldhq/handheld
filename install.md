@@ -77,12 +77,14 @@ same device at once.
 
 Snapshot → read refs → act → re-snapshot. Snapshot refs (`@e1`, `@e2`, …) are cached to
 disk between invocations, so a later `tap @e2` resolves against the last `snap`.
+Before dispatch, handheld verifies the cached snapshot still matches Tiny's live
+foreground/digest; stale cached targets fail closed with a re-snap hint.
 
 ```bash
 handheld snap -i                 # actionable refs (@e1…) + readable text; add --screenshot for a PNG
 handheld tap @e2                 # tap a cached ref (or `handheld tap 540 960` for coordinates)
 handheld type "hello"            # set the focused field (Tiny setText; --append to append)
-handheld open_app settings       # launch an app by name/alias/package
+handheld open-app settings       # launch an app by name/alias/package
 handheld back | home | recent
 handheld shell "getprop ro.product.model"
 ```
@@ -99,12 +101,14 @@ need no API key** — a key is only required for Gateway provisioning (`init`/`c
   default and return the post-action snapshot. Point your agent's MCP config at it.
 - **One-shot task:** `handheld run "Open Settings and confirm Wi-Fi is visible"` spins up a
   sandboxed local agent wired to the handheld MCP server.
+- **Harness-shaped workspace:** `handheld run --workspace-template harness "Inspect the current screen"` adds mobile interaction skills, package-keyed domain skills, and evidence folders to the run workspace. Add `--local [serial]` for an adb device/emulator with no cloud API auth.
 - **Shell out:** the discrete subcommands above work in any script (each call is a fresh
   process; state lives in `~/.handheld`).
 
 ## Maintenance
 
-- `handheld status` — active connections + transport health (the closest thing to a doctor).
+- `handheld status` — active connections + transport health; add `--prune` to remove stale records with no usable relay or ADB transport.
+- `handheld doctor` — read-only, secret-safe diagnostics for config, target selection, relay, ADB, Tiny, and stale-prune readiness.
 - `handheld disconnect [device-id]` — tear down. A bare `disconnect` resolves the sole
   connection; with several attached it requires an explicit serial. Local teardown never
   calls the Gateway.
@@ -153,6 +157,6 @@ phone:
 
 ```bash
 handheld connect --local            # or `handheld init` for a cloud phone
-handheld open_app settings
+handheld open-app settings
 handheld snap -i                     # actionable refs + text for the Settings screen
 ```

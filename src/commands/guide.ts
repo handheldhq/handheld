@@ -36,13 +36,13 @@ TARGETING (how to name what you act on)
 
 ACT
   handheld tap @e7 | tap 'id=foo' | tap 'label=Submit' | tap 540 960
-  handheld long_press <target> | double_tap <target>
+  handheld long-press <target> | double-tap <target>
   handheld type "text"                 # type into the focused field (replaces)
   handheld type 'label=Notes' "text"   # focus a target first, then type
   handheld type @e5 "text" --append    # append instead of replacing
   handheld swipe x1 y1 x2 y2 | scroll down|up|left|right
-  handheld back | home | recent | press_key <name|keycode>
-  handheld open_app <pkg|alias> | launch <url|component> | copy/paste
+  handheld back | home | recent | press-key <name|keycode>
+  handheld open-app <pkg|alias> | launch <url|component> | copy/paste
 
 WINDOWS & KEYBOARD
   Only the foreground activity's nodes are shown inline. Nodes from other windows
@@ -99,14 +99,16 @@ complete structured node list (every field, never culled).
 const SELECTORS = `
 Durable selectors (id= / label= / text=)
 
-@eN refs renumber every time the screen changes. A selector is a durable handle
-that re-resolves against the last snapshot and survives the tree shuffling, so
-it is the right target for scripts and retries.
+@eN refs renumber every time the screen changes. Before dispatching a cached
+ref/selector target, handheld verifies the last snapshot against Tiny's live
+foreground/digest and refuses stale targets with a re-snap hint. A selector is a
+durable handle inside the last snapshot and survives @eN tree shuffling, so it is
+the right target for scripts and retries after a fresh snap.
 
   handheld tap 'id=search_action_bar'        # resource-id (full or pkg-stripped leaf)
   handheld tap 'label=Network & internet'    # the visible name (case-insensitive)
   handheld tap 'text=Submit'                  # also matches a node's displayed value
-  handheld type 'label=Notes' "hello"         # selectors work on type/fill/long_press/…
+  handheld type 'label=Notes' "hello"         # selectors work on type/fill/long-press/...
 
 Matching:
   id=     node's resource-id, full ('com.app:id/x') or leaf ('x'). Exact.
@@ -126,8 +128,12 @@ Troubleshooting
   Targets resolve against the last snapshot. Run 'handheld snap' before tap/type.
 
 Target did not resolve / ref not tappable
-  Refs renumber on every screen change. Re-'snap', or use a durable id=/label=
-  selector (see 'handheld guide selectors').
+  Refs renumber on every screen change. Re-'snap', then use the new ref or a
+  durable id=/label= selector (see 'handheld guide selectors').
+
+Cached snapshot target is stale
+  The live foreground/digest no longer matches the snapshot that produced the
+  target. Run 'handheld snap' again before using cached refs/selectors.
 
 Snapshot fails, empty, or "Tiny unavailable"
   Re-bootstrap the on-device helper: 'handheld tiny bootstrap' (--force to

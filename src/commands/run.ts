@@ -10,7 +10,7 @@ import {
 import { basename, join, resolve } from "node:path";
 import type { Command } from "commander";
 import { AuthError, getResolvedDevice, requireApiKey, requireApiUrl } from "../auth.js";
-import { connectDevice } from "./connect.js";
+import { connectDevice, connectLocalDevice } from "./connect.js";
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -31,16 +31,22 @@ type RunCommandOptions = {
   claude?: string;
   codex?: string;
   dryRun?: boolean;
+  harness?: boolean;
   interactive?: boolean;
+  local?: boolean | string;
   model?: string;
   tinyWarmup?: boolean;
   tui?: boolean;
   workspace?: string;
+  workspaceTemplate?: string;
 };
+
+type WorkspaceTemplate = "default" | "harness";
 
 export type RunWorkspace = {
   agentsPath: string;
   claudePath: string;
+  evidencePath: string;
   mcpConfigPath: string;
   mcpServer: HandheldMcpServerConfig;
   prompt: string;
@@ -59,6 +65,7 @@ export type RunWorkspaceInput = {
   runsDir?: string;
   task: string;
   workspace?: string;
+  workspaceTemplate?: WorkspaceTemplate;
 };
 
 export type AgentRunInput = {
@@ -107,6 +114,9 @@ export function registerRunCommand(program: Command): void {
     .option("--codex <path>", "Codex executable", "codex")
     .option("--model <model>", "agent model alias or full model name")
     .option("--workspace <path>", "use an existing workspace directory instead of creating ./.handheld/runs/<id>")
+    .option("--workspace-template <name>", "workspace template to prepare (default|harness)", "default")
+    .option("--harness", "alias for --workspace-template harness")
+    .option("--local [serial]", "run against a local adb device/emulator without requiring cloud API auth")
     .option("--tui", "launch the local agent in interactive terminal mode instead of one-shot mode")
     .option("--interactive", "alias for --tui")
     .option("--dry-run", "prepare the workspace and print the agent command without connecting or spawning")
@@ -123,9 +133,11 @@ Examples:
   handheld run "Search Chrome for the weather" --model sonnet
   handheld run "Inspect the current screen" --agent codex --model gpt-5
   handheld run "Open Settings" --dry-run                     # print the workspace + agent command, connect nothing
+  handheld run "Open Settings" --local --workspace-template harness --dry-run
 
 Caveats:
   - Targets the default cloud device — run \`handheld init\` (or \`handheld config set default-device <id>\`) first; needs an API key.
+  - For a local adb device/emulator, pass --local [serial]; no cloud API key is required.
   - Spawns a local \`claude\`/\`codex\` binary; it must be installed and on PATH (override with --claude/--codex <path>).
   - The agent gets ONLY the locked Handheld MCP server; provider API-key env vars are stripped unless you pass --allow-api-key-env.
   - --tui is Claude-only (interactive Codex is unsupported); use plain \`handheld run --agent codex\` for headless Codex.`
@@ -155,7 +167,7 @@ Caveats:
     });
 }
 
-async function runLocalAgent(
+export async function runLocalAgent(
   rawTask: string,
   options: RunCommandOptions,
   rootOptions: RootOptions,
@@ -168,37 +180,59 @@ async function runLocalAgent(
     throw new Error("interactive Codex runs are not supported yet because Codex TUI cannot ignore user config; use `handheld run --agent codex` for locked headless runs");
   }
 
-  const deviceId = getResolvedDevice(rootOptions.device);
+  const workspaceTemplate = normalizeWorkspaceTemplate(
+    options.harness ? "harness" : options.workspaceTemplate,
+  );
+  const localRun = options.local !== undefined && options.local !== false;
+  const localSerial = localRun
+    ? typeof options.local === "string"
+      ? options.local
+      : rootOptions.device
+    : undefined;
+  let deviceId = localRun ? (localSerial ?? "local") : getResolvedDevice(rootOptions.device);
   if (!deviceId) {
     throw new AuthError("No default device configured. Run `handheld init` first.");
   }
 
-  const apiUrl = requireApiUrl();
-  requireApiKey();
+  const apiUrl = localRun ? (process.env.HANDHELD_API_URL ?? "") : requireApiUrl();
+  if (!localRun) requireApiKey();
+
+  let connected:
+    | Awaited<ReturnType<typeof connectDevice>>
+    | Awaited<ReturnType<typeof connectLocalDevice>>
+    | null = null;
+  if (localRun && !options.dryRun) {
+    connected = await connectLocalDevice({
+      json: true,
+      serial: localSerial,
+      startTiny: false,
+    });
+    deviceId = connected.deviceId;
+  }
 
   const workspace = createRunWorkspace({
     apiUrl,
     deviceId,
     task,
     workspace: options.workspace,
+    workspaceTemplate,
   });
 
-  let connected: Awaited<ReturnType<typeof connectDevice>> | null = null;
   let tinyWarmup: TinyWarmupPlan | null = null;
-  if (!options.dryRun) {
+  if (!options.dryRun && !localRun) {
     connected = await connectDevice({
       deviceId,
       json: true,
       startTiny: false,
       webrtcOnly: true,
     });
-    if (options.tinyWarmup !== false) {
-      tinyWarmup = startTinyWarmup({
-        apiUrl,
-        deviceId,
-        workspace,
-      });
-    }
+  }
+  if (!options.dryRun && options.tinyWarmup !== false) {
+    tinyWarmup = startTinyWarmup({
+      apiUrl,
+      deviceId,
+      workspace,
+    });
   }
 
   const plan = buildAgentRunPlan({
@@ -244,7 +278,7 @@ async function runLocalAgent(
           tinyWarmup,
           workspace: workspace.workspaceDir,
           deviceId,
-          sessionId: connected?.sessionId ?? null,
+          sessionId: connectionSessionId(connected),
         },
         null,
         2,
@@ -262,17 +296,26 @@ async function runLocalAgent(
 }
 
 export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
+  const workspaceTemplate = input.workspaceTemplate ?? "default";
   const runId = input.workspace
     ? basename(resolve(input.workspace))
     : buildRunId(input.task, input.now ?? new Date());
   const workspaceDir = resolve(input.workspace ?? join(input.runsDir ?? getProjectRunsDir(), runId));
   const agentWorkspaceDir = join(workspaceDir, "agent-workspace");
   const domainSkillsDir = join(agentWorkspaceDir, "domain-skills");
+  const evidenceDir = join(workspaceDir, "evidence");
+  const agentEvidenceDir = join(agentWorkspaceDir, "evidence");
+  const interactionSkillsDir = join(agentWorkspaceDir, "interaction-skills", "mobile");
   const logsDir = join(workspaceDir, "logs");
   ensureDir(workspaceDir);
   ensureDir(agentWorkspaceDir);
   ensureDir(domainSkillsDir);
+  ensureDir(evidenceDir);
+  ensureDir(agentEvidenceDir);
   ensureDir(logsDir);
+  if (workspaceTemplate === "harness") {
+    ensureDir(interactionSkillsDir);
+  }
 
   const mcpServer: HandheldMcpServerConfig = {
     args: input.cliArgs ?? defaultMcpArgs(input.deviceId),
@@ -306,15 +349,29 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   writePrivateFile(agentsPath, agents);
   writePrivateFile(claudePath, agents);
   writePrivateFile(taskPath, taskMarkdown);
-  writePrivateFile(join(agentWorkspaceDir, "README.md"), renderAgentWorkspaceReadme());
+  writePrivateFile(
+    join(agentWorkspaceDir, "README.md"),
+    renderAgentWorkspaceReadme(workspaceTemplate),
+  );
   writePrivateFile(
     join(domainSkillsDir, "README.md"),
     renderDomainSkillsReadme(),
   );
+  writePrivateFile(
+    join(agentEvidenceDir, "README.md"),
+    renderEvidenceReadme(),
+  );
+  if (workspaceTemplate === "harness") {
+    writeHarnessWorkspaceTemplate({
+      agentWorkspaceDir,
+      interactionSkillsDir,
+    });
+  }
 
   return {
     agentsPath,
     claudePath,
+    evidencePath: evidenceDir,
     mcpConfigPath,
     mcpServer,
     prompt,
@@ -499,7 +556,10 @@ function startTinyWarmup(input: {
 }
 
 function emitRunPrepared(input: {
-  connected: Awaited<ReturnType<typeof connectDevice>> | null;
+  connected:
+    | Awaited<ReturnType<typeof connectDevice>>
+    | Awaited<ReturnType<typeof connectLocalDevice>>
+    | null;
   json?: boolean;
   plan: AgentRunPlan;
   tinyWarmup: TinyWarmupPlan | null;
@@ -514,6 +574,7 @@ function emitRunPrepared(input: {
           args: input.plan.args,
           stdin: input.plan.stdin ? input.workspace.promptPath : null,
           workspace: input.workspace.workspaceDir,
+          evidence: input.workspace.evidencePath,
           mcpConfig: input.workspace.mcpConfigPath,
           prompt: input.workspace.promptPath,
           connected: input.connected,
@@ -526,6 +587,7 @@ function emitRunPrepared(input: {
     return;
   }
   console.log(`Workspace: ${input.workspace.workspaceDir}`);
+  console.log(`Evidence: ${input.workspace.evidencePath}`);
   console.log(`MCP config: ${input.workspace.mcpConfigPath}`);
   console.log(`Prompt: ${input.workspace.promptPath}`);
   if (input.tinyWarmup) {
@@ -574,7 +636,19 @@ This workspace is intentionally isolated for one local agent run.
 `;
 }
 
-function renderAgentWorkspaceReadme(): string {
+function renderAgentWorkspaceReadme(template: WorkspaceTemplate = "default"): string {
+  if (template === "harness") {
+    return `# agent-workspace
+
+This is a harness-shaped mobile agent workspace.
+
+- Use only Handheld MCP tools for device actions.
+- agent_helpers.py documents the normal CLI helper names, but cloud-loop agents should call MCP tools directly.
+- domain-skills/ stores package-keyed app maps.
+- interaction-skills/mobile/ stores reusable mobile mechanics.
+- evidence/ stores snapshots, screenshots, and final-state notes.
+`;
+  }
   return `# agent-workspace
 
 Run-local helper notes live here. Keep source-of-truth actions in Handheld MCP tools.
@@ -587,6 +661,75 @@ function renderDomainSkillsReadme(): string {
 Capture durable app knowledge here: package names, stable labels, waits, traps, and verification checks.
 Avoid secrets, run narration, and raw coordinates as primary instructions.
 `;
+}
+
+function renderEvidenceReadme(): string {
+  return `# evidence
+
+Capture final and intermediate proof here: snapshots, screenshots, status JSON, and concise notes.
+Do not store secrets or unredacted credentials.
+`;
+}
+
+function writeHarnessWorkspaceTemplate(input: {
+  agentWorkspaceDir: string;
+  interactionSkillsDir: string;
+}): void {
+  writePrivateFile(
+    join(input.agentWorkspaceDir, "agent_helpers.py"),
+    `"""Handheld harness helper names.
+
+Normal CLI agents can use handheld-harness Python helpers with these names.
+Cloud-loop agents should use Handheld MCP tools directly; this file is a map of
+the shared semantics, not a second runtime.
+"""
+`,
+  );
+  const skills: Record<string, string> = {
+    "observe-and-act.md": `# Observe And Act
+
+Loop: snap, one small action, post-state or re-snap, verify. If settle is inconclusive, observe again; do not repeat the mutating action blindly.
+`,
+    "selectors-and-refs.md": `# Selectors And Refs
+
+Prefer id=, label=, and text= selectors. @eN refs are volatile and only valid for the latest snapshot. Coordinates are fallback only.
+`,
+    "keyboard-and-text-entry.md": `# Keyboard And Text Entry
+
+Use fill/type MCP tools for text. Verify a focused editable field before typing into focus. Re-snap after keyboard dismissal.
+`,
+    "scroll-lists-and-recycler-views.md": `# Scroll Lists And Recycler Views
+
+Use small scrolls, then re-snap. Recycler rows recycle refs, so use visible row text or stable ids after the row is on-screen.
+`,
+    "app-launch-and-deeplinks.md": `# App Launch And Deeplinks
+
+Use app launch/open-url tools, then verify package/activity before acting.
+`,
+    "permissions-dialogs-and-system-ui.md": `# Permissions Dialogs And System UI
+
+Permission prompts often belong to System UI. Use visible labels such as Allow, then verify control returned to the app.
+`,
+    "webviews.md": `# WebViews
+
+Treat WebViews as mobile UI unless a better tool surface is available. Use visible text, small scrolls, and post-state checks.
+`,
+    "files-apk-and-intents.md": `# Files APK And Intents
+
+Use handheld tools for package/file/intent work. Do not add raw adb setup flows to skills.
+`,
+    "cloud-device-sessions.md": `# Cloud Device Sessions
+
+Cloud-loop agents stay on locked Handheld MCP tools. Do not reach for provider API keys in the workspace.
+`,
+    "evidence-and-final-answer.md": `# Evidence And Final Answer
+
+Capture final observed state and evidence paths before final response. Redact sensitive identifiers.
+`,
+  };
+  for (const [name, body] of Object.entries(skills)) {
+    writePrivateFile(join(input.interactionSkillsDir, name), body);
+  }
 }
 
 function buildRunId(task: string, now: Date): string {
@@ -626,6 +769,27 @@ function normalizeAgentRuntime(value?: string): AgentRuntime {
     return normalized as AgentRuntime;
   }
   throw new Error(`unsupported agent "${value}". Supported agents: ${SUPPORTED_AGENTS.join(", ")}`);
+}
+
+function normalizeWorkspaceTemplate(value?: string): WorkspaceTemplate {
+  const normalized = (value ?? "default").trim().toLowerCase();
+  if (normalized === "default" || normalized === "harness") {
+    return normalized;
+  }
+  throw new Error(
+    'unsupported workspace template "' +
+      value +
+      '". Supported templates: default, harness'
+  );
+}
+
+function connectionSessionId(
+  connected:
+    | Awaited<ReturnType<typeof connectDevice>>
+    | Awaited<ReturnType<typeof connectLocalDevice>>
+    | null,
+): string | null {
+  return connected && "sessionId" in connected ? connected.sessionId : null;
 }
 
 function tomlString(value: string): string {

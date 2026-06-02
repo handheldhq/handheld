@@ -25,7 +25,7 @@ export async function runRouteCommand(input: {
   const adbArgs = input.adbArgs ?? [];
 
   const conn = serial
-    ? getConnections().find((connection) => connection.adb.serial === serial)
+    ? getConnections().find((connection) => connection.adb?.serial === serial)
     : getActiveConnection();
   const relayState = conn ? getRelayState(conn) : null;
 

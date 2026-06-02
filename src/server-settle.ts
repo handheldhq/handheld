@@ -48,6 +48,12 @@ export interface ServerSettleResult {
 // settle logic + #5 no-double-fire handling stay in one place.
 export type TinyInputSender = (input: TinyInputOptions) => Promise<Record<string, unknown>>;
 
+function deviceInjectionConfirmed(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as Record<string, unknown>;
+  return record.injected === true || record.deviceInjected === true || record.reachedDevice === true;
+}
+
 /**
  * Try Tiny's server-side input-with-settle (/v2/input with settle:true): Tiny
  * injects the gesture AND settles on the filter-independent layoutDigest in one
@@ -83,13 +89,12 @@ export async function tryServerSettle(
     // Old helper (no /input route) or never reached the device — the gesture did
     // not execute, so the client path is a safe first attempt.
     if (/HTTP 404|not found/i.test(msg) || failedBeforeReachingDevice(msg)) return null;
-    // Ambiguous: the gesture WAS sent, but the settle response timed out / was
-    // aborted (common on continuously-repainting screens — webviews, animations).
-    // Re-dispatching would double-fire (#5), and reporting failure makes a retry
-    // loop do exactly that. So report it as sent-but-unsettled (success) and nudge
-    // the agent to re-snap, rather than a false "failed".
+    // Ambiguous timeouts/aborts are not enough proof that input fired. Only a
+    // sender that explicitly marks the inject acknowledgement may report
+    // sent-but-unsettled; otherwise fall back to the safe client path.
     const name = (err as { name?: string }).name;
     if (name === "AbortError" || name === "TimeoutError" || /\babort|timed?\s?out|timeout/i.test(msg)) {
+      if (!deviceInjectionConfirmed(err)) return null;
       return {
         ok: true,
         settleInconclusive: true,

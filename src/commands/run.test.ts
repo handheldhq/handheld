@@ -1,13 +1,14 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildAgentEnv,
   buildCodexRunPlan,
   buildClaudeRunPlan,
   buildTinyWarmupPlan,
   createRunWorkspace,
+  runLocalAgent,
 } from "./run.js";
 
 const tempDirs: string[] = [];
@@ -59,6 +60,77 @@ describe("handheld run workspace", () => {
     );
     expect(readFileSync(workspace.promptPath, "utf8")).toContain(
       "Start by observing the phone with snap",
+    );
+    expect(
+      existsSync(join(workspace.workspaceDir, "agent-workspace", "agent_helpers.py")),
+    ).toBe(false);
+    expect(existsSync(workspace.evidencePath)).toBe(true);
+  });
+
+  it("creates harness workspace helpers, interaction skills, and evidence docs", () => {
+    const root = tempRoot();
+    const workspace = createRunWorkspace({
+      apiUrl: "https://api.test",
+      cliArgs: ["handheld", "--device", "dev_123", "--mcp"],
+      cliCommand: "node",
+      deviceId: "dev_123",
+      runsDir: root,
+      task: "Inspect screen",
+      workspaceTemplate: "harness",
+    });
+
+    const agentWorkspace = join(workspace.workspaceDir, "agent-workspace");
+    expect(readFileSync(join(agentWorkspace, "README.md"), "utf8")).toContain(
+      "harness-shaped mobile agent workspace",
+    );
+    expect(readFileSync(join(agentWorkspace, "agent_helpers.py"), "utf8")).toContain(
+      "not a second runtime",
+    );
+    expect(
+      existsSync(join(agentWorkspace, "interaction-skills", "mobile", "observe-and-act.md")),
+    ).toBe(true);
+    expect(readFileSync(join(agentWorkspace, "evidence", "README.md"), "utf8")).toContain(
+      "Capture final",
+    );
+  });
+
+  it("prepares a local harness dry run without requiring cloud API configuration", async () => {
+    const workspaceDir = tempRoot();
+    const previousApiUrl = process.env.HANDHELD_API_URL;
+    delete process.env.HANDHELD_API_URL;
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      logs.push(String(value));
+    });
+    try {
+      await runLocalAgent(
+        "Observe",
+        {
+          agent: "codex",
+          dryRun: true,
+          local: "emulator-5554",
+          workspace: workspaceDir,
+          workspaceTemplate: "harness",
+        },
+        { json: true },
+      );
+    } finally {
+      spy.mockRestore();
+      if (previousApiUrl === undefined) {
+        delete process.env.HANDHELD_API_URL;
+      } else {
+        process.env.HANDHELD_API_URL = previousApiUrl;
+      }
+    }
+
+    const prepared = JSON.parse(logs.join("\n"));
+    expect(prepared.ok).toBe(true);
+    expect(prepared.workspace).toBe(workspaceDir);
+    expect(prepared.evidence).toBe(join(workspaceDir, "evidence"));
+    expect(prepared.connected).toBeNull();
+    expect(prepared.args).toContain('mcp_servers.handheld.env.HANDHELD_API_URL=""');
+    expect(readFileSync(join(workspaceDir, "agent-workspace", "agent_helpers.py"), "utf8")).toContain(
+      "not a second runtime",
     );
   });
 });

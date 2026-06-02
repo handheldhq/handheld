@@ -7,6 +7,7 @@ import {
 } from "../auth.js";
 import { ApiError, HandheldApiClient } from "../api-client.js";
 import { getConfig, setConfig } from "../state.js";
+import { maskApiKey } from "../redact.js";
 import { connectDevice } from "./connect.js";
 
 interface DeviceCodeResponse {
@@ -398,7 +399,7 @@ Caveats:
       }
       setConfig({ [configKey]: value });
       console.log(
-        `Set ${key} = ${key === "api-key" ? value.slice(0, 8) + "..." : value}`
+        `Set ${key} = ${key === "api-key" ? maskApiKey(value) : value}`
       );
     });
 
@@ -428,7 +429,7 @@ Caveats:
           output: "output",
         };
         const val = cfg[keyMap[key] as keyof typeof cfg];
-        if (val) console.log(val);
+        if (val) console.log(key === "api-key" ? maskApiKey(String(val)) : val);
         else {
           console.error(`Not set: ${key}`);
           console.error("Hint: set it with `handheld config set " + key + " <value>` (or run `handheld login` to populate api-key/api-url).");
@@ -437,7 +438,7 @@ Caveats:
         // Show all (mask API key)
         const display = { ...cfg };
         if (display.apiKey) {
-          display.apiKey = display.apiKey.slice(0, 8) + "...";
+          display.apiKey = maskApiKey(display.apiKey);
         }
         console.log(JSON.stringify(display, null, 2));
       }

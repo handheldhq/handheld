@@ -52,6 +52,7 @@ Tiny v2 keeps:
 
 - `GET /v2/status`
 - `GET /v2/snapshot`
+- `GET /v2/signature`
 - `GET /v2/observe`
 - `GET /v2/events`
 - `GET /v2/waitForChange`
@@ -73,6 +74,15 @@ The only mutating endpoint is `POST /v2/setText`. It remains in the APK because
 semantic text entry needs in-process access to
 `AccessibilityNodeInfo.performAction(...)`. It is advertised as a separate
 capability, not as a general action transport.
+
+`setText` treats `text` / `value` as literal input. Leading, trailing, and
+all-whitespace values are preserved; option fields such as `mode`, `clear`,
+and `target` remain normalized.
+
+`signature` returns the live foreground component, event sequence, and
+filter-independent layout digest without sending the full node tree back to the
+host. Cached snapshot refs/selectors use it to fail closed when the live screen
+no longer matches the snapshot that produced the target.
 
 ## Host-side action model
 

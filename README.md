@@ -45,6 +45,8 @@ handheld create                         # alias for init
 handheld devices                        # list Gateway profiles/devices
 handheld connect <profile-id>           # start/reuse a session when transports exist
 handheld status                         # check connection health
+handheld status --prune                 # remove stale saved connection records
+handheld doctor                         # secret-safe config/target/transport diagnostics
 handheld disconnect                     # tear down
 ```
 
@@ -88,21 +90,21 @@ handheld snap --screenshot              # also save a JPEG screenshot file
 handheld tap 540 960                    # tap at coordinates
 handheld tap @e2                        # tap cached snapshot ref
 handheld tap 'id=search_action_bar'     # durable selector: tap by resource-id
-handheld tap 'label=Network & internet' # tap by visible name (id=/label=/text= also work on type/fill/long_press/…)
-handheld long_press @e2                 # long press cached snapshot ref
-handheld long_press 540 960             # long press at coordinates
-handheld double_tap @e2                 # double tap a ref
+handheld tap 'label=Network & internet' # tap by visible name (id=/label=/text= also work on type/fill/long-press/...)
+handheld long-press @e2                 # long press cached snapshot ref
+handheld long-press 540 960             # long press at coordinates
+handheld double-tap @e2                 # double tap a ref
 handheld swipe 540 400 540 1200         # swipe gesture
 handheld type "hello world"             # set the focused field (replaces existing text)
 handheld type @e5 "hello world"         # set @e5 to the text
 handheld type @e5 "hello world" --append  # append instead of replacing
-handheld list_apps                      # list launchable app packages
-handheld open_app settings              # open by package, alias, or package-like name
+handheld list-apps                      # list launchable app packages
+handheld open-app settings              # open by package, alias, or package-like name
 handheld launch "https://example.com"   # deep link / intent
 handheld launch com.example/.Main       # explicit component
 handheld copy "copied text"             # set clipboard
 handheld paste @e5                      # focus then paste
-handheld press_key back                 # key name or Android keycode
+handheld press-key back                 # key name or Android keycode
 handheld back                           # Android back
 handheld home                           # Android home
 handheld recent                         # Android recent apps
@@ -152,14 +154,15 @@ Line grammar:
   foreground activity. **`[keyboard open · …]`** — the IME, collapsed to one line
   (the keys are rarely tap targets — use `type`; pass `--all` to expand them).
 
-Refs are invalidated by anything that changes the screen — re-`snap` after a
-tap, scroll, navigation, or async update before using refs again. The `id=` and
-`"title"` shown on actionable nodes double as **durable selectors**: `tap
-id=search_action_bar`, `tap 'label=Network & internet'`, or `type 'label=Notes'
-"hi"` resolve against the last snapshot but survive the `@eN` renumbering that
-happens when the tree shuffles (`id=` matches the full or package-stripped
-resource-id; `label=`/`text=` match the name/value, case-insensitive; the
-actionable node wins when several match).
+Refs are invalidated by anything that changes the screen. Before a cached
+`@eN`/selector target dispatches input, handheld compares the last snapshot's
+foreground signature with Tiny's live foreground/digest and refuses stale targets
+with a re-`snap` hint. The `id=` and `"title"` shown on actionable nodes double
+as **durable selectors**: `tap id=search_action_bar`, `tap 'label=Network &
+internet'`, or `type 'label=Notes' "hi"` resolve against the last snapshot but
+survive `@eN` renumbering within that snapshot (`id=` matches the full or
+package-stripped resource-id; `label=`/`text=` match the name/value,
+case-insensitive; the actionable node wins when several match).
 
 Compatibility commands remain available for existing scripts:
 
@@ -250,6 +253,7 @@ handheld run "Search Chrome for current weather" --model sonnet
 handheld run "Open Settings and check storage" --tui
 handheld run "Inspect the current screen" --agent codex --model gpt-5
 handheld run "Inspect the current screen" --dry-run
+handheld run "Inspect the current screen" --local --workspace-template harness --dry-run
 ```
 
 `handheld run` starts or reuses the default device, creates an isolated project-local
@@ -267,6 +271,10 @@ pass `--allow-api-key-env` only when you intentionally want API-key auth.
 Pass `--tui` to launch Claude Code's interactive terminal in the prepared
 workspace so you can steer the agent while it uses the same locked Handheld
 MCP server.
+Pass `--local [serial]` to target an adb device/emulator with no cloud API
+auth. Pass `--workspace-template harness` or `--harness` to include a
+handheld-harness-shaped `agent-workspace` with mobile interaction skills and
+evidence directories.
 
 ## Coming Soon
 
@@ -297,7 +305,7 @@ handheld --mcp --device <device-id>
 npx -y handheld --mcp
 ```
 
-Default agent tools: `devices`, `create_device`, `connect`, `disconnect`, `snap`, `tap`, `long_press`, `double_tap`, `swipe`, `type`, `list_apps`, `open_app`, `launch`, `copy`, `paste`, `press_key`, `back`, `home`, `recent`, `shell`.
+Default agent tools: `devices`, `create_device`, `connect`, `disconnect`, `snap`, `tap`, `long_press`, `double_tap`, `swipe`, `type`, `list_apps`, `open_app`, `launch`, `copy`, `paste`, `press_key`, `back`, `home`, `recent`, `shell`, `teach_request`.
 
 Set `HANDHELD_MCP_FULL=1` to expose advanced fleet/profile/billing and compatibility tools for operators.
 
@@ -316,6 +324,10 @@ Stored in `~/.handheld/config.json`. Available keys:
 | `api-url` | Gateway API base URL |
 | `default-device` | Default profile/session alias for commands |
 | `output` | Default output format (`table`, `json`, `quiet`) |
+
+`handheld config get api-key`, `handheld config get`, and `handheld doctor`
+mask stored API keys by default. Use environment variables only for the current
+process when a full key must be supplied non-interactively.
 
 ## Requirements
 
