@@ -271,10 +271,10 @@ pass `--allow-api-key-env` only when you intentionally want API-key auth.
 Pass `--tui` to launch Claude Code's interactive terminal in the prepared
 workspace so you can steer the agent while it uses the same locked Handheld
 MCP server.
-Pass `--local [serial]` to target an adb device/emulator with no cloud API
-auth. Pass `--workspace-template harness` or `--harness` to include a
-handheld-harness-shaped `agent-workspace` with mobile interaction skills and
-evidence directories.
+Pass `--local` to target an adb device/emulator with no cloud API auth; add
+`--local-serial <serial>` when several local devices are attached. Pass
+`--workspace-template harness` or `--harness` to include a handheld-harness-shaped
+`agent-workspace` with mobile interaction skills and evidence directories.
 
 ## Coming Soon
 

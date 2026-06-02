@@ -101,7 +101,7 @@ need no API key** — a key is only required for Gateway provisioning (`init`/`c
   default and return the post-action snapshot. Point your agent's MCP config at it.
 - **One-shot task:** `handheld run "Open Settings and confirm Wi-Fi is visible"` spins up a
   sandboxed local agent wired to the handheld MCP server.
-- **Harness-shaped workspace:** `handheld run --workspace-template harness "Inspect the current screen"` adds mobile interaction skills, package-keyed domain skills, and evidence folders to the run workspace. Add `--local [serial]` for an adb device/emulator with no cloud API auth.
+- **Harness-shaped workspace:** `handheld run --workspace-template harness "Inspect the current screen"` adds mobile interaction skills, package-keyed domain skills, and evidence folders to the run workspace. Add `--local` for an adb device/emulator with no cloud API auth; use `--local-serial <serial>` when several are attached.
 - **Shell out:** the discrete subcommands above work in any script (each call is a fresh
   process; state lives in `~/.handheld`).
 

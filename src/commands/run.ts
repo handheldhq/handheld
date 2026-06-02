@@ -33,7 +33,8 @@ type RunCommandOptions = {
   dryRun?: boolean;
   harness?: boolean;
   interactive?: boolean;
-  local?: boolean | string;
+  local?: boolean;
+  localSerial?: string;
   model?: string;
   tinyWarmup?: boolean;
   tui?: boolean;
@@ -60,6 +61,7 @@ export type RunWorkspaceInput = {
   apiUrl: string;
   cliArgs?: string[];
   cliCommand?: string;
+  connectionMode?: "cloud" | "local";
   deviceId: string;
   now?: Date;
   runsDir?: string;
@@ -116,7 +118,8 @@ export function registerRunCommand(program: Command): void {
     .option("--workspace <path>", "use an existing workspace directory instead of creating ./.handheld/runs/<id>")
     .option("--workspace-template <name>", "workspace template to prepare (default|harness)", "default")
     .option("--harness", "alias for --workspace-template harness")
-    .option("--local [serial]", "run against a local adb device/emulator without requiring cloud API auth")
+    .option("--local", "run against a local adb device/emulator without requiring cloud API auth")
+    .option("--local-serial <serial>", "local adb serial to use with --local")
     .option("--tui", "launch the local agent in interactive terminal mode instead of one-shot mode")
     .option("--interactive", "alias for --tui")
     .option("--dry-run", "prepare the workspace and print the agent command without connecting or spawning")
@@ -137,7 +140,7 @@ Examples:
 
 Caveats:
   - Targets the default cloud device — run \`handheld init\` (or \`handheld config set default-device <id>\`) first; needs an API key.
-  - For a local adb device/emulator, pass --local [serial]; no cloud API key is required.
+  - For a local adb device/emulator, pass --local; add --local-serial <serial> when several devices are attached.
   - Spawns a local \`claude\`/\`codex\` binary; it must be installed and on PATH (override with --claude/--codex <path>).
   - The agent gets ONLY the locked Handheld MCP server; provider API-key env vars are stripped unless you pass --allow-api-key-env.
   - --tui is Claude-only (interactive Codex is unsupported); use plain \`handheld run --agent codex\` for headless Codex.`
@@ -183,12 +186,11 @@ export async function runLocalAgent(
   const workspaceTemplate = normalizeWorkspaceTemplate(
     options.harness ? "harness" : options.workspaceTemplate,
   );
-  const localRun = options.local !== undefined && options.local !== false;
-  const localSerial = localRun
-    ? typeof options.local === "string"
-      ? options.local
-      : rootOptions.device
-    : undefined;
+  const localRun = options.local === true;
+  if (options.localSerial && !localRun) {
+    throw new Error("--local-serial requires --local");
+  }
+  const localSerial = localRun ? options.localSerial ?? rootOptions.device : undefined;
   let deviceId = localRun ? (localSerial ?? "local") : getResolvedDevice(rootOptions.device);
   if (!deviceId) {
     throw new AuthError("No default device configured. Run `handheld init` first.");
@@ -212,6 +214,7 @@ export async function runLocalAgent(
 
   const workspace = createRunWorkspace({
     apiUrl,
+    connectionMode: localRun ? "local" : "cloud",
     deviceId,
     task,
     workspace: options.workspace,
@@ -331,6 +334,7 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   };
 
   const prompt = renderPrompt({
+    connectionMode: input.connectionMode ?? "cloud",
     deviceId: input.deviceId,
     task: input.task,
     workspaceDir,
@@ -598,10 +602,14 @@ function emitRunPrepared(input: {
 }
 
 function renderPrompt(input: {
+  connectionMode: "cloud" | "local";
   deviceId: string;
   task: string;
   workspaceDir: string;
 }): string {
+  const reconnectInstruction = input.connectionMode === "local"
+    ? `If the tool says no device is connected, call connect with deviceId "${input.deviceId}" and local true.`
+    : `If the tool says no device is connected, call connect with deviceId "${input.deviceId}".`;
   return `You are a Handheld local agent running in an isolated workspace.
 
 Workspace: ${input.workspaceDir}
@@ -613,7 +621,7 @@ ${input.task}
 Rules:
 - Use only the handheld MCP tools.
 - Tiny helper bootstrap is already warming in the background. Start by observing the phone with snap; if it is still installing, wait briefly and retry.
-- If the tool says no device is connected, call connect with deviceId "${input.deviceId}".
+- ${reconnectInstruction}
 - Keep actions small and verify visible state after meaningful actions.
 - Do not edit host files, run host shell commands, or use non-mobile tools.
 - Keep durable app facts under agent-workspace/domain-skills if you discover reusable app behavior.

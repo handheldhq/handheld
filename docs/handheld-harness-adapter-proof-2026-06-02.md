@@ -22,7 +22,7 @@ adapter plus `handheld run` harness workspace support.
   - Command: `PYTHONPATH=src HANDHELD_BIN=/Users/hbruceweaver/Projects/lattice-technologies/oss/handheld/dist/cli.js python -m handheld_harness.run --doctor`
   - Result: `ok: handheld CLI reachable`.
 - Harness dry-run:
-  - Command: `node dist/cli.js run "Inspect the current screen" --local emulator-5554 --workspace-template harness --dry-run --agent codex --json`
+  - Command: `node dist/cli.js run "Inspect the current screen" --local --local-serial emulator-5554 --workspace-template harness --dry-run --agent codex --json`
   - Result: prepared a workspace with `agent-workspace`, `evidence`, locked Handheld MCP config, and empty local `HANDHELD_API_URL`.
 - Heredoc/fake-handheld smoke:
   - Command: `PYTHONPATH=src HH_FAKE_RECORD=/tmp/handheld-harness-heredoc-record.jsonl HANDHELD_BIN=/Users/hbruceweaver/Projects/lattice-technologies/oss/handheld-harness/tests/fixtures/fake_handheld.py python -m handheld_harness.run` with `state = snap()`.
@@ -46,5 +46,5 @@ Local emulator smoke:
 - Adapter command: `PYTHONPATH=src HANDHELD_BIN=... HH_DEVICE=emulator-5554 HH_EVIDENCE_DIR=/tmp/handheld-harness-local-evidence-20260602 python -m handheld_harness.run`.
 - Adapter result: `before_activity=com.google.android.apps.nexuslauncher.NexusLauncherActivity`, `launch_ok=True`, `launch_has_snapshot=True`, `after_activity=com.android.settings.Settings`.
 - Evidence: `/tmp/handheld-harness-local-evidence-20260602/20260602T140605Z-local-smoke-snap.json`, `...-status.json`, `...-screen.jpg`.
-- Harness local dry-run: `node dist/cli.js --json run "Open Settings and confirm Wi-Fi is visible" --local emulator-5554 --workspace-template harness --dry-run --agent codex` returned ok with locked MCP config and evidence path.
+- Harness local dry-run: `node dist/cli.js --json run "Open Settings and confirm Wi-Fi is visible" --local --local-serial emulator-5554 --workspace-template harness --dry-run --agent codex` returned ok with locked MCP config and evidence path.
 - Cleanup: `node dist/cli.js --json disconnect emulator-5554` returned ok; `adb -s emulator-5554 emu kill` stopped the emulator.

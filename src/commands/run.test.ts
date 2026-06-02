@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildAgentEnv,
@@ -8,6 +9,7 @@ import {
   buildClaudeRunPlan,
   buildTinyWarmupPlan,
   createRunWorkspace,
+  registerRunCommand,
   runLocalAgent,
 } from "./run.js";
 
@@ -108,7 +110,8 @@ describe("handheld run workspace", () => {
         {
           agent: "codex",
           dryRun: true,
-          local: "emulator-5554",
+          local: true,
+          localSerial: "emulator-5554",
           workspace: workspaceDir,
           workspaceTemplate: "harness",
         },
@@ -129,9 +132,71 @@ describe("handheld run workspace", () => {
     expect(prepared.evidence).toBe(join(workspaceDir, "evidence"));
     expect(prepared.connected).toBeNull();
     expect(prepared.args).toContain('mcp_servers.handheld.env.HANDHELD_API_URL=""');
+    expect(
+      prepared.args.find((arg: string) => arg.startsWith("mcp_servers.handheld.args=")),
+    ).toContain("emulator-5554");
+    expect(readFileSync(join(workspaceDir, "prompt.md"), "utf8")).toContain(
+      'connect with deviceId "emulator-5554" and local true',
+    );
     expect(readFileSync(join(workspaceDir, "agent-workspace", "agent_helpers.py"), "utf8")).toContain(
       "not a second runtime",
     );
+  });
+
+  it("parses --local before the task without consuming the task text", async () => {
+    const workspaceDir = tempRoot();
+    const previousApiUrl = process.env.HANDHELD_API_URL;
+    delete process.env.HANDHELD_API_URL;
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      logs.push(String(value));
+    });
+    const program = new Command().name("handheld").exitOverride().option("--json");
+    registerRunCommand(program);
+
+    try {
+      await program.parseAsync(
+        [
+          "--json",
+          "run",
+          "--local",
+          "--local-serial",
+          "emulator-5554",
+          "Observe",
+          "--dry-run",
+          "--agent",
+          "codex",
+          "--workspace",
+          workspaceDir,
+        ],
+        { from: "user" },
+      );
+    } finally {
+      spy.mockRestore();
+      if (previousApiUrl === undefined) {
+        delete process.env.HANDHELD_API_URL;
+      } else {
+        process.env.HANDHELD_API_URL = previousApiUrl;
+      }
+    }
+
+    const prepared = JSON.parse(logs.join("\n"));
+    expect(readFileSync(join(workspaceDir, "task.md"), "utf8")).toContain("Observe");
+    expect(prepared.connected).toBeNull();
+  });
+
+  it("rejects a local serial without local mode", async () => {
+    await expect(
+      runLocalAgent(
+        "Observe",
+        {
+          dryRun: true,
+          localSerial: "emulator-5554",
+          workspace: tempRoot(),
+        },
+        { json: true },
+      ),
+    ).rejects.toThrow("--local-serial requires --local");
   });
 });
 
