@@ -41,6 +41,8 @@ describe("uninstall command", () => {
     writeFileSync(join(home, ".handheld", "config.json"), "{}\n");
     mkdirSync(join(project, ".handheld"), { recursive: true });
     writeFileSync(join(project, ".handheld", "mcp.json"), "{}\n");
+    mkdirSync(join(project, "agent-space"), { recursive: true });
+    writeFileSync(join(project, "agent-space", "README.md"), "# agent-space\n");
     mkdirSync(join(project, "agent-workspace"), { recursive: true });
     writeFileSync(join(project, "agent-workspace", "agent_helpers.py"), "# helper\n");
   }
@@ -54,9 +56,11 @@ describe("uninstall command", () => {
     expect(output).toContain("Dry run");
     expect(output).toContain(join(home, ".handheld"));
     expect(output).toContain(join(project, ".handheld"));
+    expect(output).toContain(join(project, "agent-space"));
     expect(output).toContain(join(project, "agent-workspace"));
     expect(existsSync(join(home, ".handheld"))).toBe(true);
     expect(existsSync(join(project, ".handheld"))).toBe(true);
+    expect(existsSync(join(project, "agent-space"))).toBe(true);
     expect(existsSync(join(project, "agent-workspace"))).toBe(true);
   });
 
@@ -68,6 +72,7 @@ describe("uninstall command", () => {
 
     expect(existsSync(join(home, ".handheld"))).toBe(false);
     expect(existsSync(join(project, ".handheld"))).toBe(false);
+    expect(existsSync(join(project, "agent-space"))).toBe(false);
     expect(existsSync(join(project, "agent-workspace"))).toBe(false);
   });
 
@@ -81,10 +86,12 @@ describe("uninstall command", () => {
     expect(parsed.dryRun).toBe(false);
     expect(parsed.targets.map((target: { label: string }) => target.label)).toEqual([
       "project",
-      "agent-workspace",
+      "agent-space",
+      "legacy-agent-workspace",
     ]);
     expect(existsSync(join(home, ".handheld"))).toBe(true);
     expect(existsSync(join(project, ".handheld"))).toBe(false);
+    expect(existsSync(join(project, "agent-space"))).toBe(false);
     expect(existsSync(join(project, "agent-workspace"))).toBe(false);
   });
 });

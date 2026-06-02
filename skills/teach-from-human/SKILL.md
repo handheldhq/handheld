@@ -12,7 +12,7 @@ description: >-
   it. Triggers on: "get a human to show me", "teach from human", "demonstrate
   this flow", "record what the human does", "synthesize a workflow from this
   trajectory". Outputs
-  agent-workspace/domain-skills/<package>/<command>.md plus workflow.json. Do
+  agent-space/skills/domain/<package>/<command>.md plus workflow.json. Do
   NOT trigger for snapshot-solvable tasks, transient failures, ambiguity a
   one-line question resolves, or when no human is available — ask first.
 ---
@@ -46,7 +46,7 @@ Reach for a human demonstration **last**, not first. Fire this skill only when
 3. **A human could demo it in under a minute** — a login wall, CAPTCHA, a
    non-obvious gesture, an app-specific multi-screen flow uninferrable from the
    snapshot.
-4. **Not already taught** — check `agent-workspace/domain-skills/<package>/`
+4. **Not already taught** — check `agent-space/skills/domain/<package>/`
    first. If the flow is there, **replay it** (see "Replay") instead of
    re-teaching.
 
@@ -130,11 +130,11 @@ password", "required": true }` with no value.
 Write two co-located artifacts (format details and the workflow.json schema:
 `references/durable-workflow-artifact.md`):
 
-- **PRIMARY** — `agent-workspace/domain-skills/<package>/<command-name>.md`:
+- **PRIMARY** — `agent-space/skills/domain/<package>/<command-name>.md`:
   the human-and-agent-readable playbook (task_pattern, variable table, steps
   with checkpoints, stable resource-ids/labels, traps). This is what
   `domain_skills("<package>")` surfaces and the run prompt reads before the
-  agent invents an approach. Match the existing `domain-skills/<package>/`
+  agent invents an approach. Match the existing `skills/domain/<package>/`
   convention exactly: package names, stable labels, waits, traps, verification
   checks; no secrets, no run narration, no raw coordinates as primary
   instructions.
@@ -145,7 +145,7 @@ Write two co-located artifacts (format details and the workflow.json schema:
   synthesis JSON a future `replay_workflow` reads. The teach session is rooted
   in whatever workspace the invoking agent is running in (its cwd), never a
   global `~/.handheld` path; if invoked inside a `handheld run` workspace, both
-  artifacts land in that workspace's `agent-workspace/`.
+  artifacts land in that workspace's `agent-space/`.
 
 ## Replay + verification
 

@@ -137,16 +137,17 @@ describe("config command secret display", () => {
     const mcpPath = join(project, ".handheld", "mcp.json");
     const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
     expect(existsSync(join(project, ".handheld", "runs"))).toBe(true);
-    expect(existsSync(join(project, "agent-workspace", "agent_helpers.py"))).toBe(true);
-    expect(existsSync(join(project, "agent-workspace", "interaction-skills", "mobile", "observe-and-act.md"))).toBe(true);
-    expect(existsSync(join(project, "agent-workspace", "domain-skills", "README.md"))).toBe(true);
+    expect(existsSync(join(project, "agent-space", "helpers", "agent_helpers.py"))).toBe(true);
+    expect(existsSync(join(project, "agent-space", "skills", "interaction", "mobile", "observe-and-act.md"))).toBe(true);
+    expect(existsSync(join(project, "agent-space", "skills", "domain", "README.md"))).toBe(true);
     expect(mcp.mcpServers.handheld.env).toEqual({
       HANDHELD_API_URL: "https://api.test",
-      HANDHELD_EVIDENCE_DIR: join(project, "agent-workspace", "evidence"),
+      HANDHELD_EVIDENCE_DIR: join(project, "agent-space", "evidence"),
     });
     expect(mcp.mcpServers.handheld.args).toContain("--mcp");
     expect(mcp.mcpServers.handheld.args).not.toContain("--device");
     expect(output).toContain(`Workspace: ${project}`);
+    expect(output).toContain(`Agent space: ${join(project, "agent-space")}`);
     expect(output).toContain(`MCP config: ${mcpPath}`);
   });
 

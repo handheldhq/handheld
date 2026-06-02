@@ -62,7 +62,7 @@ After it returns, `handheld status` shows the connected device; `handheld device
 lists all profiles. (`handheld create` is the alias that only ever provisions with a
 configured key — `init` now covers that case too.)
 It also creates `.handheld/mcp.json`, `.handheld/runs/`, and an editable
-`agent-workspace/` with `agent_helpers.py`, domain skills, mobile interaction
+`agent-space/` with `helpers/agent_helpers.py`, domain skills, mobile interaction
 skills, and evidence storage. Use `--no-harness-workspace` to skip that scaffold.
 
 ### B) Local device / emulator — `handheld connect --local`
@@ -113,7 +113,7 @@ need no API key** — a key is only required for Gateway provisioning (`init`/`c
 
 ## Maintenance
 
-- `handheld uninstall` — dry-run local cleanup; add `--yes` to remove `~/.handheld`, project `.handheld/`, and `agent-workspace/` for test resets.
+- `handheld uninstall` — dry-run local cleanup; add `--yes` to remove `~/.handheld`, project `.handheld/`, `agent-space/`, and legacy `agent-workspace/` for test resets.
 - `handheld status` — active connections + transport health; add `--prune` to remove stale records with no usable relay or ADB transport.
 - `handheld doctor` — read-only, secret-safe diagnostics for config, target selection, relay, ADB, Tiny, and stale-prune readiness.
 - `handheld disconnect [device-id]` — tear down. A bare `disconnect` resolves the sole

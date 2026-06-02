@@ -1,6 +1,7 @@
 import { existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Command } from "commander";
+import { AGENT_SPACE_DIRNAME, LEGACY_AGENT_WORKSPACE_DIRNAME } from "../harness-workspace.js";
 import { HANDHELD_HOME } from "../state.js";
 
 type RootOptions = {
@@ -16,7 +17,7 @@ type UninstallOptions = {
 
 export type UninstallTarget = {
   exists: boolean;
-  label: "global" | "project" | "agent-workspace";
+  label: "global" | "project" | "agent-space" | "legacy-agent-workspace";
   path: string;
   removed?: boolean;
 };
@@ -50,9 +51,14 @@ export function buildUninstallPlan(input: {
         path: join(projectRoot, ".handheld"),
       },
       {
-        exists: existsSync(join(projectRoot, "agent-workspace")),
-        label: "agent-workspace",
-        path: join(projectRoot, "agent-workspace"),
+        exists: existsSync(join(projectRoot, AGENT_SPACE_DIRNAME)),
+        label: "agent-space",
+        path: join(projectRoot, AGENT_SPACE_DIRNAME),
+      },
+      {
+        exists: existsSync(join(projectRoot, LEGACY_AGENT_WORKSPACE_DIRNAME)),
+        label: "legacy-agent-workspace",
+        path: join(projectRoot, LEGACY_AGENT_WORKSPACE_DIRNAME),
       },
     );
   }
@@ -85,21 +91,21 @@ export function executeUninstallPlan(plan: UninstallPlan): UninstallPlan {
 export function registerUninstallCommand(program: Command): void {
   program
     .command("uninstall")
-    .description("remove local Handheld state and project agent workspace files (dry-run unless --yes)")
+    .description("remove local Handheld state and project agent-space files (dry-run unless --yes)")
     .option("-y, --yes", "actually remove files; without this, only print what would be removed")
     .option("--workspace <path>", "project directory to clean (default current directory)")
     .option("--no-global", "do not remove ~/.handheld")
-    .option("--no-project", "do not remove project .handheld/ and agent-workspace/")
+    .option("--no-project", "do not remove project .handheld/, agent-space/, or legacy agent-workspace/")
     .addHelpText(
       "after",
       "\nExamples:\n" +
         "  handheld uninstall                  # preview global + project cleanup\n" +
-        "  handheld uninstall --yes            # remove ~/.handheld, ./.handheld, ./agent-workspace\n" +
+        "  handheld uninstall --yes            # remove ~/.handheld, ./.handheld, ./agent-space\n" +
         "  handheld uninstall --no-global --yes\n" +
         "  handheld uninstall --workspace /tmp/app --yes\n" +
         "\nCaveats:\n" +
         "  - This is local cleanup for testing. It does not delete cloud phones or Gateway profiles.\n" +
-        "  - Project cleanup removes only .handheld/ and agent-workspace/ under the selected workspace.\n" +
+        "  - Project cleanup removes only .handheld/, agent-space/, and legacy agent-workspace/ under the selected workspace.\n" +
         "  - Use --yes intentionally; the default is a dry run."
     )
     .action((opts: UninstallOptions, command: Command) => {

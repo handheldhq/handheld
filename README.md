@@ -23,7 +23,7 @@ npx handheld i
 trial cloud phone when available, connects relay and ADB transports, starts the
 bundled Tiny helper when a device command path is available, redirects the
 approval tab to that phone's live device view, and scaffolds this project as a
-mobile agent workspace.
+mobile agent space.
 
 **Already have a key? `init` runs headlessly — no browser.**
 When `HANDHELD_API_KEY` is present, `handheld init` skips the browser sign-in
@@ -33,7 +33,7 @@ path:
 
 ```bash
 export HANDHELD_API_KEY=<your-api-key>
-handheld init                 # creates + connects a device + agent workspace, no CLI auth prompt
+handheld init                 # creates + connects a device + agent space, no CLI auth prompt
 ```
 
 The saved global key is not per-device state. Workspace/project config can take
@@ -45,15 +45,16 @@ By default, `handheld init` also creates project-local agent setup:
 .handheld/
   mcp.json
   runs/
-agent-workspace/
-  agent_helpers.py
-  domain-skills/
-  interaction-skills/mobile/
+agent-space/
+  helpers/agent_helpers.py
+  skills/domain/
+  skills/interaction/mobile/
   evidence/
 ```
 
 Use `--workspace <path>` to scaffold a different project directory, or
 `--no-harness-workspace` for the old auth/device-only behavior.
+See [`docs/agent-space-naming.md`](docs/agent-space-naming.md) for the naming rationale and legacy compatibility rules.
 
 ## Profiles And Sessions
 
@@ -63,7 +64,7 @@ handheld devices                        # list Gateway profiles/devices
 handheld connect <profile-id>           # start/reuse a session when transports exist
 handheld status                         # check connection health
 handheld status --prune                 # remove stale saved connection records
-handheld uninstall                      # preview removal of ~/.handheld + project .handheld/agent-workspace
+handheld uninstall                      # preview removal of ~/.handheld + project .handheld/agent-space
 handheld doctor                         # secret-safe config/target/transport diagnostics
 handheld disconnect                     # tear down
 ```
@@ -292,7 +293,7 @@ MCP server.
 Pass `--local` to target an adb device/emulator with no cloud API auth; add
 `--local-serial <serial>` when several local devices are attached. Pass
 `--workspace-template harness` or `--harness` to include a handheld-harness-shaped
-`agent-workspace` with mobile interaction skills and evidence directories.
+`agent-space` with mobile interaction skills and evidence directories.
 
 ## Coming Soon
 

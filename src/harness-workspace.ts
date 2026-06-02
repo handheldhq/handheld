@@ -3,16 +3,18 @@ import { join, resolve } from "node:path";
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
+export const AGENT_SPACE_DIRNAME = "agent-space";
+export const LEGACY_AGENT_WORKSPACE_DIRNAME = "agent-workspace";
 
-export type HarnessAgentWorkspace = {
+export type HarnessAgentSpace = {
   agentHelpersPath: string;
-  agentWorkspaceDir: string;
+  agentSpaceDir: string;
   domainSkillsDir: string;
   evidenceDir: string;
   interactionSkillsDir: string;
 };
 
-export type ProjectHarnessWorkspace = HarnessAgentWorkspace & {
+export type ProjectHarnessWorkspace = HarnessAgentSpace & {
   handheldDir: string;
   mcpConfigPath: string;
   rootDir: string;
@@ -20,19 +22,29 @@ export type ProjectHarnessWorkspace = HarnessAgentWorkspace & {
 };
 
 export function ensureHarnessAgentWorkspace(input: {
-  agentWorkspaceDir: string;
+  agentSpaceDir: string;
   overwrite?: boolean;
-}): HarnessAgentWorkspace {
-  const agentWorkspaceDir = resolve(input.agentWorkspaceDir);
-  const domainSkillsDir = join(agentWorkspaceDir, "domain-skills");
-  const interactionSkillsDir = join(agentWorkspaceDir, "interaction-skills", "mobile");
-  const evidenceDir = join(agentWorkspaceDir, "evidence");
-  const agentHelpersPath = join(agentWorkspaceDir, "agent_helpers.py");
-  ensureDir(agentWorkspaceDir);
+}): HarnessAgentSpace {
+  const agentSpaceDir = resolve(input.agentSpaceDir);
+  const helpersDir = join(agentSpaceDir, "helpers");
+  const skillsDir = join(agentSpaceDir, "skills");
+  const domainSkillsDir = join(skillsDir, "domain");
+  const interactionSkillsDir = join(skillsDir, "interaction", "mobile");
+  const evidenceDir = join(agentSpaceDir, "evidence");
+  const agentHelpersPath = join(helpersDir, "agent_helpers.py");
+  ensureDir(agentSpaceDir);
+  ensureDir(helpersDir);
+  ensureDir(skillsDir);
   ensureDir(domainSkillsDir);
   ensureDir(interactionSkillsDir);
   ensureDir(evidenceDir);
-  writePrivateFile(join(agentWorkspaceDir, "README.md"), renderAgentWorkspaceReadme(), {
+  writePrivateFile(join(agentSpaceDir, "README.md"), renderAgentSpaceReadme(), {
+    overwrite: input.overwrite,
+  });
+  writePrivateFile(join(helpersDir, "README.md"), renderHelpersReadme(), {
+    overwrite: input.overwrite,
+  });
+  writePrivateFile(join(skillsDir, "README.md"), renderSkillsReadme(), {
     overwrite: input.overwrite,
   });
   writePrivateFile(join(domainSkillsDir, "README.md"), renderDomainSkillsReadme(), {
@@ -51,7 +63,7 @@ export function ensureHarnessAgentWorkspace(input: {
   }
   return {
     agentHelpersPath,
-    agentWorkspaceDir,
+    agentSpaceDir,
     domainSkillsDir,
     evidenceDir,
     interactionSkillsDir,
@@ -72,7 +84,7 @@ export function createProjectHarnessWorkspace(input: {
   ensureDir(handheldDir);
   ensureDir(runsDir);
   const workspace = ensureHarnessAgentWorkspace({
-    agentWorkspaceDir: join(rootDir, "agent-workspace"),
+    agentSpaceDir: join(rootDir, AGENT_SPACE_DIRNAME),
     overwrite: input.overwrite,
   });
   const mcpConfigPath = join(handheldDir, "mcp.json");
@@ -116,21 +128,35 @@ function defaultMcpArgs(deviceId?: string | null): string[] {
   return args;
 }
 
-function renderAgentWorkspaceReadme(): string {
-  return `# agent-workspace
+function renderAgentSpaceReadme(): string {
+  return `# agent-space
 
-This is a harness-shaped mobile agent workspace.
+This is a harness-shaped mobile agent space.
 
 - Use only Handheld CLI/MCP tools for device actions.
-- agent_helpers.py is an editable helper shim for normal CLI agents; cloud-loop agents should call MCP tools directly.
-- domain-skills/ stores package-keyed app maps.
-- interaction-skills/mobile/ stores reusable mobile mechanics.
+- helpers/agent_helpers.py is an editable helper shim for normal CLI agents; cloud-loop agents should call MCP tools directly.
+- skills/domain/ stores package-keyed app maps.
+- skills/interaction/mobile/ stores reusable mobile mechanics.
 - evidence/ stores snapshots, screenshots, and final-state notes.
 `;
 }
 
+function renderHelpersReadme(): string {
+  return `# helpers
+
+Editable helper shims for normal CLI agents live here. Keep device actions delegated through Handheld CLI/MCP tools.
+`;
+}
+
+function renderSkillsReadme(): string {
+  return `# skills
+
+Durable agent skills live here. Keep app-specific knowledge under domain/ and reusable mobile mechanics under interaction/mobile/.
+`;
+}
+
 function renderDomainSkillsReadme(): string {
-  return `# domain-skills
+  return `# skills/domain
 
 Capture durable app knowledge here: package names, stable labels, waits, traps, and verification checks.
 Avoid secrets, run narration, and raw coordinates as primary instructions.
@@ -148,9 +174,10 @@ Do not store secrets or unredacted credentials.
 function renderAgentHelpersTemplate(): string {
   return `"""Editable Handheld harness helper shim.
 
-This file is loaded by handheld_harness.helpers when HH_AGENT_WORKSPACE points
-at this directory. It imports the handheld-harness helper namespace, then leaves
-space for task-specific wrappers. It is not a second runtime: helpers still
+This file is loaded by handheld_harness.helpers when HH_AGENT_SPACE points at
+the agent-space directory. HH_AGENT_WORKSPACE remains a legacy fallback. It
+imports the handheld-harness helper namespace, then leaves space for
+task-specific wrappers. It is not a second runtime: helpers still
 delegate to the handheld CLI/MCP boundary.
 """
 
@@ -165,11 +192,11 @@ from handheld_harness.helpers import *  # noqa: F401,F403
 function renderProjectHandheldReadme(): string {
   return `# .handheld
 
-Project-local Handheld agent workspace metadata.
+Project-local Handheld agent-space metadata.
 
 - mcp.json points agents at the Handheld MCP server for this project.
 - runs/ stores isolated handheld run workspaces.
-- ../agent-workspace/ stores editable helper shims, domain skills, interaction skills, and evidence.
+- ../agent-space/ stores editable helper shims, domain skills, interaction skills, and evidence.
 `;
 }
 

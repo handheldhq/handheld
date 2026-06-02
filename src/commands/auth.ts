@@ -513,7 +513,7 @@ Caveats:
   program
     .command("init")
     .alias("i")
-    .description("first-run setup: sign in, claim/connect a phone, open the viewer, and scaffold an agent workspace")
+    .description("first-run setup: sign in, claim/connect a phone, open the viewer, and scaffold an agent space")
     .option(
       "--api-url <url>",
       `API URL (overrides HANDHELD_API_URL env and config; default ${DEFAULT_API_URL})`
@@ -521,7 +521,7 @@ Caveats:
     .option("--no-device", "only sign in; do not create or select a device")
     .option("--no-connect", "do not connect transports after the device starts")
     .option("--workspace <path>", "project directory to scaffold for agent phone work (default current directory)")
-    .option("--workspace-template <name>", "agent workspace template to scaffold (harness)", "harness")
+    .option("--workspace-template <name>", "agent space template to scaffold (harness)", "harness")
     .option("--no-harness-workspace", "skip project-local harness workspace scaffolding")
     .option("--no-open", "print the login URL without opening a browser")
     .option("--with-adb", "also request provider ADB during init/connect")
@@ -548,7 +548,7 @@ Caveats:
   - Saved config keys remain the global fallback; workspace/project config can override later when present.
   - Without a key it opens a browser device-code flow; use --no-open on a headless host.
   - Claims a TRIAL cloud phone, sets it as default-device, connects it, and opens the live viewer when available.
-  - Scaffolds a project-local harness workspace by default: .handheld/, agent-workspace/, helpers, skills, and evidence.
+  - Scaffolds a project-local harness agent space by default: .handheld/, agent-space/, helpers, skills, and evidence.
   - For a LOCAL adb device you don't need init at all — just \`handheld connect --local\`.`
     )
     .action(
@@ -670,7 +670,7 @@ Caveats:
                   ok: true,
                   workspace: workspace
                     ? {
-                        agentWorkspace: workspace.agentWorkspaceDir,
+                        agentSpace: workspace.agentSpaceDir,
                         evidence: workspace.evidenceDir,
                         mcpConfig: workspace.mcpConfigPath,
                         root: workspace.rootDir,
@@ -696,7 +696,7 @@ Caveats:
           }
           if (workspace) {
             console.log(`Workspace: ${workspace.rootDir}`);
-            console.log(`Agent workspace: ${workspace.agentWorkspaceDir}`);
+            console.log(`Agent space: ${workspace.agentSpaceDir}`);
             console.log(`MCP config: ${workspace.mcpConfigPath}`);
             console.log('Next: handheld run "Open Settings and tell me what you see" --workspace-template harness');
           }

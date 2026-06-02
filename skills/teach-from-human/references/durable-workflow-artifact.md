@@ -13,7 +13,7 @@ deterministic replay.
 
 ## PRIMARY: domain-skill markdown
 
-Path: `agent-workspace/domain-skills/<package>/<command-name>.md`
+Path: `agent-space/skills/domain/<package>/<command-name>.md`
 
 This matches the handheld harness convention exactly — `domain_skills("<package>")`
 surfaces it and the run prompt reads it before the agent invents an approach.
@@ -66,9 +66,9 @@ replay — never written into the artifact.
 
 ## SECONDARY: workflow.json
 
-Path: `agent-workspace/domain-skills/<package>/<command-name>.workflow.json` —
+Path: `agent-space/skills/domain/<package>/<command-name>.workflow.json` —
 the **sibling of the markdown**, in the invoking agent's workspace (the same
-`domain-skills/<package>/` dir the run prompt already reads), never a global
+`skills/domain/<package>/` dir the run prompt already reads), never a global
 path. The raw teach session (trajectory.json, frames, audio) stays in the
 project-local `.handheld/teach/<teach-id>/`, mirroring `.handheld/runs/`.
 

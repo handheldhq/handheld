@@ -226,7 +226,7 @@ The whole point is that the agent reaches for this **exactly when stuck, and not
 > 1. You have tried at least two distinct approaches (e.g. different entry points / different snapshot refs / search vs. menu navigation) and re-observed state after each, and you are still not making progress toward the objective;
 > 2. The blocker is *knowledge*, not a transient (not "the app is still loading", not "Tiny is bootstrapping" — those call for `wait_for`/retry, never a human);
 > 3. A human physically present could plausibly demonstrate the step in under a minute (a login wall, a CAPTCHA, a non-obvious gesture, an app-specific flow you can't infer from the snapshot);
-> 4. No existing domain-skill for this package already covers the flow (check `agent-workspace/domain-skills/<package>/` first — if the human already taught it, replay instead of re-teaching).
+> 4. No existing domain skill for this package already covers the flow (check `agent-space/skills/domain/<package>/` first — if the human already taught it, replay instead of re-teaching).
 >
 > Do **not** use it for: tasks you can complete by reading the snapshot more carefully, transient failures, ambiguity that a one-line clarifying question would resolve, or anything where a human isn't actually available. When in doubt, ask a clarifying question first; escalate to a full demonstration only when a *verbal* answer wouldn't unblock you.
 
@@ -258,7 +258,7 @@ Mobile adaptations of the schema (small, principled):
 
 There are three candidate artifact forms (mirroring finding C's three partial primitives). The recommendation is **a layered artifact, not a single form**, because each layer serves a different replay confidence level:
 
-1. **PRIMARY: a per-package domain-skill markdown** at `agent-workspace/domain-skills/<package>/<command-name>.md`. This is the durable, human-and-agent-readable record. It is keyed by Android package (matching the harness's existing `domain-skills/<package>/` convention exactly), contains the synthesized `task_pattern`, the `steps[]` with their checkpoints, the `suggested_variables`, stable resource-ids/labels, and the `additional_context` traps. **This is the canonical artifact.** It plugs directly into the mechanism that already exists: `run.ts` seeds `agent-workspace/domain-skills/`, the run prompt already instructs the agent to "Keep durable app facts under agent-workspace/domain-skills," and the harness SKILL.md already tells the agent to read these before inventing an approach. **We are filling finding C's gap #5 (domain-skill write-back from human demonstration) with zero new read-path plumbing.**
+1. **PRIMARY: a per-package domain-skill markdown** at `agent-space/skills/domain/<package>/<command-name>.md`. This is the durable, human-and-agent-readable record. It is keyed by Android package (matching the harness's existing `skills/domain/<package>/` convention exactly), contains the synthesized `task_pattern`, the `steps[]` with their checkpoints, the `suggested_variables`, stable resource-ids/labels, and the `additional_context` traps. **This is the canonical artifact.** It plugs directly into the mechanism that already exists: `run.ts` seeds `agent-space/skills/domain/`, the run prompt already instructs the agent to "Keep durable app facts under agent-space/skills/domain," and the harness SKILL.md already tells the agent to read these before inventing an approach. **We are filling finding C's gap #5 (domain-skill write-back from human demonstration) with zero new read-path plumbing.**
 
 2. **SECONDARY: a structured `workflow.json`** (the finding-A synthesis schema, verbatim) co-located in the teach dir and referenced from the markdown. This is the machine-precise form an MCP `replay_workflow` tool reads (Phase 2). It is the same JSON the synthesis step already produces — we just persist it.
 
@@ -268,7 +268,7 @@ Why not pick just one: the markdown is robust but requires the agent (LLM) to re
 
 ### How the agent replays it later (+ verification)
 
-At the start of any `run`, the agent already reads `agent-workspace/domain-skills/<package>/`. With a taught workflow present:
+At the start of any `run`, the agent already reads `agent-space/skills/domain/<package>/`. With a taught workflow present:
 
 1. **Match.** The agent (or a slash-command `/add-payee`) recognizes the `command_name` / `task_pattern` matches the current objective and binds `suggested_variables` from the objective ("add payee Alice / acct 123" → `{payee_name: "Alice", account_number: "123"}`).
 2. **Replay.** Phase 1: the agent executes the markdown steps through normal MCP tools, substituting variables. Phase 2+: `replay_workflow` runs the `workflow.json` steps; Phase 3: `handheld replay` runs the deterministic script.
@@ -285,14 +285,14 @@ Three registration points, so the capability is never something the agent has to
 
 2. **Skill registration: `teach-from-human`** shipped in the CLI package and listed in the run prompt's tool/skill preamble. The `renderPrompt()` in `run.ts` gains a line: *"If you get genuinely stuck on a device step (see the teach-from-human trigger gates), call `teach_request` to bring in a human and learn the flow durably — then replay it."* This is the one-line nudge that makes the escape hatch top-of-mind without encouraging overuse.
 
-3. **Read-path already wired.** The run workspace already seeds `agent-workspace/domain-skills/` and the prompt already says to consult it. Taught workflows land there, so **reuse is automatic** — the agent reads a taught skill on the next run with no new instruction.
+3. **Read-path already wired.** The run workspace already seeds `agent-space/skills/domain/` and the prompt already says to consult it. Taught workflows land there, so **reuse is automatic** — the agent reads a taught skill on the next run with no new instruction.
 
 ### End-to-end loop
 
 ```
 agent runs task ──► stuck (2 approaches failed, knowledge gap, human could show it)
    │
-   ├─ checks domain-skills/<pkg>/ ── already taught? ──► replay (skip to ▼ verify)
+   ├─ checks skills/domain/<pkg>/ ── already taught? ──► replay (skip to ▼ verify)
    │
    ▼ not taught
 calls MCP teach_request{objective, package}
@@ -305,7 +305,7 @@ calls MCP teach_request{objective, package}
 teach-from-human skill:
    ├─ annotate frames (finding A live-annotation prompt)
    ├─ synthesize (finding A teach_synthesis prompt + JSON schema)   [REUSED methodology]
-   └─ write domain-skills/<pkg>/<command>.md  + workflow.json
+   └─ write skills/domain/<pkg>/<command>.md  + workflow.json
    ▼
 agent replays the synthesized steps, substituting variables
    ▼ verify each step's checkpoint via wait_for; verify final goal
@@ -328,7 +328,7 @@ next time: domain-skill present ──► replay directly, no human needed
 
 **My honest take: the product owner is right to be unsure, and the answer is "yes, but as the top rung of a ladder, not the default."** Most agent "stuck" states are not knowledge gaps — they're impatience (UI still loading), under-reading the snapshot, or ambiguity a single question resolves. Full demonstration is the **expensive escape hatch you reach for last**, which is exactly why §3's four-gate trigger is the load-bearing part of the whole design. If we ship the recorder/synthesizer but get the trigger wrong, we will have built an annoyance. If we get the trigger right, demonstration is genuinely the only thing that durably teaches a non-verbalizable flow — and the holotab teardown proves the synthesis half works.
 
-A strong **intermediate** worth shipping *before* full demonstration: the **one-line hint → domain-skill** path. It captures most of the durable-learning value (the agent writes what the human said into `domain-skills/<pkg>/`) for a fraction of the build cost and human cost. I'd argue this should be Phase 0.
+A strong **intermediate** worth shipping *before* full demonstration: the **one-line hint → domain-skill** path. It captures most of the durable-learning value (the agent writes what the human said into `skills/domain/<pkg>/`) for a fraction of the build cost and human cost. I'd argue this should be Phase 0.
 
 ### Risks
 
@@ -347,7 +347,7 @@ A strong **intermediate** worth shipping *before* full demonstration: the **one-
 - Transient failures (loading, bootstrapping) — retry/`wait_for`, never a human.
 - Anything a clarifying question resolves — ask first.
 - When no human is available — the trigger must check/assume availability; a blocked `teach_request` with no human is a hang.
-- Flows already covered by an existing `domain-skills/<pkg>/` entry — replay, don't re-teach.
+- Flows already covered by an existing `skills/domain/<pkg>/` entry — replay, don't re-teach.
 - One-off tasks unlikely to recur — the synthesis overhead isn't worth it; just have the human do it in the viewer and move on (`--no-synthesize`).
 
 ### Open questions (genuine, not papered over)
@@ -360,7 +360,7 @@ A strong **intermediate** worth shipping *before* full demonstration: the **one-
 
 ### Phased build plan
 
-- **Phase 0 — one-line hint → domain-skill (cheapest durable win).** No recorder. When stuck, the agent asks the human for a one-line hint and writes it (lightly structured) into `agent-workspace/domain-skills/<package>/`. Proves the read/replay path and the trigger gates with almost no new code. *This de-risks everything and may capture 60% of the value.*
+- **Phase 0 — one-line hint → domain-skill (cheapest durable win).** No recorder. When stuck, the agent asks the human for a one-line hint and writes it (lightly structured) into `agent-space/skills/domain/<package>/`. Proves the read/replay path and the trigger gates with almost no new code. *This de-risks everything and may capture 60% of the value.*
 - **Phase 1 — MVP recorder + synthesis → markdown.** `handheld teach` opens the headed viewer (reuse `connectDevice`), runs the state-sampled poll-loop recorder, writes `trajectory.json`, and the `teach-from-human` skill synthesizes a **domain-skill markdown** (finding A methodology). Replay is LLM-interpreted (the agent reads the markdown). MCP `teach_request` with the blocking handover gate. **No deterministic replay yet** — markdown + agent is the whole loop. Ship the security constraint (no stored credentials) from day one.
 - **Phase 2 — structured `workflow.json` + `replay_workflow` MCP tool.** Persist the synthesis JSON; add an MCP tool that replays it step-by-step with per-step `checkpoint` verification and the fallback ladder. Still LLM-mediated per step, but structured.
 - **Phase 3 — deterministic `handheld replay` (no LLM) + richer capture.** The deterministic step script and node-addressing scheme (open question #5); the `getevent`/Gateway touch-coordinate spike (open question #1) if it panned out; voice narration. Always with the LLM fallback. This is where cost/latency wins land, and where brittleness risk is highest — gate it behind solid checkpoints.
@@ -378,7 +378,7 @@ A strong **intermediate** worth shipping *before* full demonstration: the **one-
 | Accessibility events (the only native action signal) | Tiny `/v2/events` | `android/.../EventLog.java` |
 | Screenshots | Tiny `/v2/screenshot` | `src/tiny-helper.ts` |
 | Workspace/run-id scaffolding | `createRunWorkspace`, `buildRunId` | `src/commands/run.ts` |
-| Durable-skill read path | `domain-skills/<pkg>/` seeding + run-prompt instruction | `src/commands/run.ts` |
+| Durable-skill read path | `skills/domain/<pkg>/` seeding + run-prompt instruction | `src/commands/run.ts` |
 | Step verification | `wait_for {stable|text|ref|change}` | `src/mcp/server.ts` |
 | MCP tool surface to extend | tool registry (`tap`, `fill`, `snap`, …) | `src/mcp/server.ts` |
 | Net-new: recorder loop, handover gate, action inference, trajectory format, replay | — | to build |

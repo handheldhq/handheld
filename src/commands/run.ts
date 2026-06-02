@@ -345,16 +345,14 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
     ? basename(resolve(input.workspace))
     : buildRunId(input.task, input.now ?? new Date());
   const workspaceDir = resolve(input.workspace ?? join(input.runsDir ?? getProjectRunsDir(), runId));
-  const agentWorkspaceDir = join(workspaceDir, "agent-workspace");
-  const domainSkillsDir = join(agentWorkspaceDir, "domain-skills");
-  const evidenceDir = join(workspaceDir, "evidence");
-  const agentEvidenceDir = join(agentWorkspaceDir, "evidence");
+  const agentSpaceDir = join(workspaceDir, "agent-space");
+  const domainSkillsDir = join(agentSpaceDir, "skills", "domain");
+  const evidenceDir = join(agentSpaceDir, "evidence");
   const logsDir = join(workspaceDir, "logs");
   ensureDir(workspaceDir);
-  ensureDir(agentWorkspaceDir);
+  ensureDir(agentSpaceDir);
   ensureDir(domainSkillsDir);
   ensureDir(evidenceDir);
-  ensureDir(agentEvidenceDir);
   ensureDir(logsDir);
 
   const mcpServer: HandheldMcpServerConfig = {
@@ -394,20 +392,20 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   writePrivateFile(taskPath, taskMarkdown);
   if (workspaceTemplate === "harness") {
     ensureHarnessAgentWorkspace({
-      agentWorkspaceDir,
+      agentSpaceDir,
       overwrite: true,
     });
   } else {
     writePrivateFile(
-      join(agentWorkspaceDir, "README.md"),
-      renderAgentWorkspaceReadme(),
+      join(agentSpaceDir, "README.md"),
+      renderAgentSpaceReadme(),
     );
     writePrivateFile(
       join(domainSkillsDir, "README.md"),
       renderDomainSkillsReadme(),
     );
     writePrivateFile(
-      join(agentEvidenceDir, "README.md"),
+      join(evidenceDir, "README.md"),
       renderEvidenceReadme(),
     );
   }
@@ -746,7 +744,7 @@ Rules:
 - Keep actions small and verify visible state after meaningful actions.
 - Do not edit host files, run host shell commands, or use non-mobile tools.
 - Use capture_evidence for important checkpoints and before your final answer; initial and final CLI snapshots are also recorded automatically in the run evidence directory.
-- Keep durable app facts under agent-workspace/domain-skills if you discover reusable app behavior.
+- Keep durable app facts under agent-space/skills/domain if you discover reusable app behavior.
 - If you get GENUINELY stuck on a device step (two distinct approaches tried and re-observed, a knowledge gap — not a transient), call teach_request to have a human demonstrate it; poll the returned envelope until status is "ready", then synthesize a reusable domain-skill from the trajectory (the teach-from-human skill). Reach for this last, not first.
 - Final answer: concise outcome plus the evidence you observed.
 `;
@@ -761,33 +759,33 @@ This workspace is intentionally isolated for one local agent run.
 - Use only the handheld MCP tools exposed by mcp.json.
 - Do not rely on global Claude settings, project settings, hooks, or non-mobile tools.
 - Tiny helper bootstrap starts in the background when the run connects.
-- capture_evidence writes durable snapshots/status/screenshots into evidence/.
-- agent-workspace/ is the only place for run-local helper notes.
-- agent-workspace/domain-skills/ is for durable app facts: selectors, waits, traps, and verification checks.
+- capture_evidence writes durable snapshots/status/screenshots into agent-space/evidence/.
+- agent-space/ is the only place for run-local helper notes.
+- agent-space/skills/domain/ is for durable app facts: selectors, waits, traps, and verification checks.
 `;
 }
 
-function renderAgentWorkspaceReadme(template: WorkspaceTemplate = "default"): string {
+function renderAgentSpaceReadme(template: WorkspaceTemplate = "default"): string {
   if (template === "harness") {
-    return `# agent-workspace
+    return `# agent-space
 
-This is a harness-shaped mobile agent workspace.
+This is a harness-shaped mobile agent space.
 
 - Use only Handheld MCP tools for device actions.
-- agent_helpers.py is an editable helper shim for normal CLI agents; cloud-loop agents should call MCP tools directly.
-- domain-skills/ stores package-keyed app maps.
-- interaction-skills/mobile/ stores reusable mobile mechanics.
+- helpers/agent_helpers.py is an editable helper shim for normal CLI agents; cloud-loop agents should call MCP tools directly.
+- skills/domain/ stores package-keyed app maps.
+- skills/interaction/mobile/ stores reusable mobile mechanics.
 - evidence/ stores snapshots, screenshots, and final-state notes.
 `;
   }
-  return `# agent-workspace
+  return `# agent-space
 
 Run-local helper notes live here. Keep source-of-truth actions in Handheld MCP tools.
 `;
 }
 
 function renderDomainSkillsReadme(): string {
-  return `# domain-skills
+  return `# skills/domain
 
 Capture durable app knowledge here: package names, stable labels, waits, traps, and verification checks.
 Avoid secrets, run narration, and raw coordinates as primary instructions.
@@ -800,74 +798,6 @@ function renderEvidenceReadme(): string {
 Capture final and intermediate proof here: snapshots, screenshots, status JSON, and concise notes.
 Do not store secrets or unredacted credentials.
 `;
-}
-
-function writeHarnessWorkspaceTemplate(input: {
-  agentWorkspaceDir: string;
-  interactionSkillsDir: string;
-}): void {
-  writePrivateFile(
-    join(input.agentWorkspaceDir, "agent_helpers.py"),
-    `"""Editable Handheld harness helper shim.
-
-This file is loaded by handheld_harness.helpers when HH_AGENT_WORKSPACE points
-at this directory. It imports the handheld-harness helper namespace, then leaves
-space for task-specific wrappers. It is not a second runtime: helpers still
-delegate to the handheld CLI/MCP boundary.
-"""
-
-from handheld_harness.helpers import *  # noqa: F401,F403
-
-
-# Add task-specific helper wrappers below. Keep device actions delegated through
-# the imported handheld-harness helpers.
-`,
-  );
-  const skills: Record<string, string> = {
-    "observe-and-act.md": `# Observe And Act
-
-Loop: snap, one small action, post-state or re-snap, verify. If settle is inconclusive, observe again; do not repeat the mutating action blindly.
-`,
-    "selectors-and-refs.md": `# Selectors And Refs
-
-Prefer id=, label=, and text= selectors. @eN refs are volatile and only valid for the latest snapshot. Coordinates are fallback only.
-`,
-    "keyboard-and-text-entry.md": `# Keyboard And Text Entry
-
-Use fill/type MCP tools for text. Verify a focused editable field before typing into focus. Re-snap after keyboard dismissal.
-`,
-    "scroll-lists-and-recycler-views.md": `# Scroll Lists And Recycler Views
-
-Use small scrolls, then re-snap. Recycler rows recycle refs, so use visible row text or stable ids after the row is on-screen.
-`,
-    "app-launch-and-deeplinks.md": `# App Launch And Deeplinks
-
-Use app launch/open-url tools, then verify package/activity before acting.
-`,
-    "permissions-dialogs-and-system-ui.md": `# Permissions Dialogs And System UI
-
-Permission prompts often belong to System UI. Use visible labels such as Allow, then verify control returned to the app.
-`,
-    "webviews.md": `# WebViews
-
-Treat WebViews as mobile UI unless a better tool surface is available. Use visible text, small scrolls, and post-state checks.
-`,
-    "files-apk-and-intents.md": `# Files APK And Intents
-
-Use handheld tools for package/file/intent work. Do not add raw adb setup flows to skills.
-`,
-    "cloud-device-sessions.md": `# Cloud Device Sessions
-
-Cloud-loop agents stay on locked Handheld MCP tools. Do not reach for provider API keys in the workspace.
-`,
-    "evidence-and-final-answer.md": `# Evidence And Final Answer
-
-Capture final observed state and evidence paths before final response. Redact sensitive identifiers.
-`,
-  };
-  for (const [name, body] of Object.entries(skills)) {
-    writePrivateFile(join(input.interactionSkillsDir, name), body);
-  }
 }
 
 function buildRunId(task: string, now: Date): string {

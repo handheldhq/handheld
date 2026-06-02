@@ -69,7 +69,7 @@ describe("handheld run workspace", () => {
       "Start by observing the phone with snap",
     );
     expect(
-      existsSync(join(workspace.workspaceDir, "agent-workspace", "agent_helpers.py")),
+      existsSync(join(workspace.workspaceDir, "agent-space", "helpers", "agent_helpers.py")),
     ).toBe(false);
     expect(existsSync(workspace.evidencePath)).toBe(true);
   });
@@ -86,17 +86,17 @@ describe("handheld run workspace", () => {
       workspaceTemplate: "harness",
     });
 
-    const agentWorkspace = join(workspace.workspaceDir, "agent-workspace");
-    expect(readFileSync(join(agentWorkspace, "README.md"), "utf8")).toContain(
-      "harness-shaped mobile agent workspace",
+    const agentSpace = join(workspace.workspaceDir, "agent-space");
+    expect(readFileSync(join(agentSpace, "README.md"), "utf8")).toContain(
+      "harness-shaped mobile agent space",
     );
-    expect(readFileSync(join(agentWorkspace, "agent_helpers.py"), "utf8")).toContain(
+    expect(readFileSync(join(agentSpace, "helpers", "agent_helpers.py"), "utf8")).toContain(
       "not a second runtime",
     );
     expect(
-      existsSync(join(agentWorkspace, "interaction-skills", "mobile", "observe-and-act.md")),
+      existsSync(join(agentSpace, "skills", "interaction", "mobile", "observe-and-act.md")),
     ).toBe(true);
-    expect(readFileSync(join(agentWorkspace, "evidence", "README.md"), "utf8")).toContain(
+    expect(readFileSync(join(agentSpace, "evidence", "README.md"), "utf8")).toContain(
       "Capture final",
     );
   });
@@ -134,11 +134,11 @@ describe("handheld run workspace", () => {
     const prepared = JSON.parse(logs.join("\n"));
     expect(prepared.ok).toBe(true);
     expect(prepared.workspace).toBe(workspaceDir);
-    expect(prepared.evidence).toBe(join(workspaceDir, "evidence"));
+    expect(prepared.evidence).toBe(join(workspaceDir, "agent-space", "evidence"));
     expect(prepared.connected).toBeNull();
     expect(prepared.args).toContain('mcp_servers.handheld.env.HANDHELD_API_URL=""');
     expect(prepared.args).toContain(
-      `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR="${workspaceDir}/evidence"`,
+      `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR="${workspaceDir}/agent-space/evidence"`,
     );
     expect(
       prepared.args.find((arg: string) => arg.startsWith("mcp_servers.handheld.args=")),
@@ -146,7 +146,7 @@ describe("handheld run workspace", () => {
     expect(readFileSync(join(workspaceDir, "prompt.md"), "utf8")).toContain(
       'connect with deviceId "emulator-5554" and local true',
     );
-    expect(readFileSync(join(workspaceDir, "agent-workspace", "agent_helpers.py"), "utf8")).toContain(
+    expect(readFileSync(join(workspaceDir, "agent-space", "helpers", "agent_helpers.py"), "utf8")).toContain(
       "from handheld_harness.helpers import *",
     );
   });
@@ -311,7 +311,7 @@ describe("handheld run workspace", () => {
     expect(spawnCalls[0]).toMatchObject({ command: "codex-test", cwd: workspaceDir });
     expect(mcp.mcpServers.handheld.args).toContain("--device");
     expect(mcp.mcpServers.handheld.args).toContain("emulator-5554");
-    expect(mcp.mcpServers.handheld.env.HANDHELD_EVIDENCE_DIR).toBe(join(workspaceDir, "evidence"));
+    expect(mcp.mcpServers.handheld.env.HANDHELD_EVIDENCE_DIR).toBe(join(workspaceDir, "agent-space", "evidence"));
   });
 
   it("rejects a local serial without local mode", async () => {
