@@ -12,6 +12,12 @@ export interface SnapshotBounds {
 export interface SnapshotNode {
   actionableId?: string;
   bounds?: SnapshotBounds;
+  // Owning window/app of this node. Tiny captures all windows (foreground app,
+  // status bar, nav bar, IME, dialogs); these let the renderer separate nodes
+  // that belong to a different surface than the foreground activity.
+  bundleId?: string;
+  windowId?: number;
+  surface?: string;
   checked: boolean;
   checkable: boolean;
   depth?: number;
@@ -23,6 +29,7 @@ export interface SnapshotNode {
   identifier?: string;
   label?: string;
   longPressable: boolean;
+  parentIndex?: number;
   raw: Record<string, unknown>;
   ref: string;
   role: string;
@@ -31,6 +38,10 @@ export interface SnapshotNode {
   stableId?: string;
   sourceRole?: string;
   value?: string;
+  // Indentation level (count of kept ancestors), pre-computed during display
+  // selection when parentIndex linkage is present. The renderer falls back to a
+  // depth-stack when it's absent (synthetic/legacy snapshots without parentIndex).
+  displayDepth?: number;
 }
 
 export interface SnapshotDocument {
@@ -51,12 +62,22 @@ export interface SnapshotDocument {
   nodes: SnapshotNode[];
   raw: Record<string, unknown>;
   treeDigest?: string;
+  // Screen rect used to cull off-screen nodes in the text view. Derived from the
+  // depth-0 (root/decor) bounds union, which Android clips to the display — so it
+  // tracks the viewport, not the taller scrollable content beneath it.
+  viewport?: { width: number; height: number };
 }
 
 export interface FormatSnapshotOptions {
+  // Render every node including structural containers and off-screen content
+  // (the full pre-order tree). Disables both collapse and viewport culling.
+  all?: boolean;
   bounds?: boolean;
   header?: boolean;
   interactive?: boolean;
+  // Keep nodes below the fold (skip viewport culling) while still collapsing
+  // structural noise.
+  offscreen?: boolean;
 }
 
 const SNAPSHOT_DIR = join(HANDHELD_HOME, "snapshots");
@@ -189,6 +210,10 @@ export function normalizeTinySnapshot(input: {
           ["longPressable", "long_pressable", "longClickable", "long_clickable"],
           false
         ),
+        parentIndex: typeof node.parentIndex === "number" ? node.parentIndex : undefined,
+        bundleId: firstString(node, ["bundleId", "packageName", "package"]),
+        windowId: typeof node.windowId === "number" ? node.windowId : undefined,
+        surface: firstString(node, ["surface"]),
         raw: node,
         ref: `@e${index + 1}`,
         role: roleName(sourceRole, editable),
@@ -201,7 +226,9 @@ export function normalizeTinySnapshot(input: {
     ];
   });
   const labeledNodes = nodes.map((node, index) => {
-    if (node.label || !isInteractiveNode(node)) return node;
+    // Absorb child text only onto genuine tap targets (hittable). Scroll/longpress
+    // containers stay bare so a row's label isn't echoed up its whole ancestor chain.
+    if (node.label || !node.hittable) return node;
     const labels: string[] = [];
     for (const child of nodes.slice(index + 1)) {
       if (
@@ -236,7 +263,30 @@ export function normalizeTinySnapshot(input: {
     nodes: labeledNodes,
     raw,
     treeDigest: firstString(raw, ["treeDigest"]),
+    viewport: deriveViewport(labeledNodes),
   };
+}
+
+// The viewport = union of the shallowest-depth (root/decor) node bounds. Android
+// clips the decor view to the physical display, so this is the screen rect even
+// when scrollable content beneath reports a taller bottom. Returns undefined when
+// no root bounds exist (then culling is skipped — every node renders).
+function deriveViewport(
+  nodes: SnapshotNode[]
+): { width: number; height: number } | undefined {
+  let minDepth = Infinity;
+  for (const node of nodes) {
+    const depth = node.depth ?? 0;
+    if (depth < minDepth) minDepth = depth;
+  }
+  let width = 0;
+  let height = 0;
+  for (const node of nodes) {
+    if ((node.depth ?? 0) !== minDepth || !node.bounds) continue;
+    width = Math.max(width, node.bounds.right);
+    height = Math.max(height, node.bounds.bottom);
+  }
+  return width > 0 && height > 0 ? { width, height } : undefined;
 }
 
 function isInteractiveNode(node: SnapshotNode): boolean {
@@ -260,27 +310,47 @@ function truncate(value: string, max = 96): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
+// Strip the constant "<package>:id/" prefix Android puts on every resource-id —
+// the package is redundant noise on every line. "com.android.chrome:id/url_bar"
+// → "url_bar". Leaves ids without that shape (e.g. webview "mwFw") untouched.
+function idLeaf(id: string): string {
+  return id.replace(/^[^:\s]+:id\//, "");
+}
+
 function formatNode(node: SnapshotNode, opts: FormatSnapshotOptions): string {
-  const parts = [`${node.ref} [${node.role}]`];
-  if (node.label) parts.push(`label=${quote(truncate(node.label))}`);
-  if (node.editable && node.value !== undefined) {
+  // Read-only nodes (plain text/labels the agent can see but not act on) render
+  // ref-less: no "@eN" to spend, and the missing ref signals "not a target".
+  // Only actionable nodes carry a ref, resource-id, and state flags.
+  const interactive = isInteractiveNode(node);
+  const parts = [interactive ? `${node.ref} [${node.role}]` : `[${node.role}]`];
+
+  if (node.label) {
+    parts.push(interactive ? `label=${quote(truncate(node.label))}` : quote(truncate(node.label)));
+  }
+  if (interactive && node.editable && node.value !== undefined) {
     parts.push(`preview=${quote(truncate(node.value))}`);
   } else if (node.value && node.value !== node.label) {
-    parts.push(`value=${quote(truncate(node.value))}`);
+    parts.push(interactive ? `value=${quote(truncate(node.value))}` : quote(truncate(node.value)));
   }
-  if (node.identifier) parts.push(`id=${quote(truncate(node.identifier, 120))}`);
+  if (interactive && node.identifier) {
+    parts.push(`id=${quote(truncate(idLeaf(node.identifier), 120))}`);
+  }
 
-  const flags: string[] = [];
-  flags.push(node.enabled ? "enabled" : "disabled");
-  if (node.hittable) flags.push("hittable");
-  if (node.focused) flags.push("focused");
-  if (node.editable) flags.push("editable");
-  if (node.selected) flags.push("selected");
-  if (node.checkable) flags.push("checkable");
-  if (node.checked) flags.push("checked");
-  if (node.scrollable) flags.push("scrollable");
-  if (node.longPressable) flags.push("longpress");
-  parts.push(...flags);
+  if (interactive) {
+    const flags: string[] = [];
+    // "enabled" is the common case and was on nearly every line — drop it, surface
+    // only the notable negative.
+    if (!node.enabled) flags.push("disabled");
+    if (node.hittable) flags.push("hittable");
+    if (node.focused) flags.push("focused");
+    if (node.editable) flags.push("editable");
+    if (node.selected) flags.push("selected");
+    if (node.checkable) flags.push("checkable");
+    if (node.checked) flags.push("checked");
+    if (node.scrollable) flags.push("scrollable");
+    if (node.longPressable) flags.push("longpress");
+    parts.push(...flags);
+  }
 
   if (opts.bounds && node.bounds) {
     const { left, top, right, bottom } = node.bounds;
@@ -290,12 +360,11 @@ function formatNode(node: SnapshotNode, opts: FormatSnapshotOptions): string {
   return parts.join(" ");
 }
 
-export function snapshotNodesForDisplay(
-  snapshot: SnapshotDocument | SnapshotOutput,
-  opts: FormatSnapshotOptions
-): SnapshotNode[] {
-  if (!opts.interactive) return snapshot.nodes;
-  const keep = new Set(snapshot.nodes.filter(isInteractiveNode));
+// Collapse structural noise: keep interactive nodes plus standalone readable text
+// the agent would otherwise be blind to. Shared by the JSON node list and the text
+// view. (Comment below documents the readable-text rule.)
+function compactKeep(nodes: SnapshotNode[]): SnapshotNode[] {
+  const keep = new Set(nodes.filter(isInteractiveNode));
   // Compact mode keeps interactive nodes AND standalone readable text the agent
   // would otherwise be blind to (headings, descriptions, displayed values, error
   // text). Only `role === "text"` qualifies — labeled layout containers
@@ -306,7 +375,7 @@ export function snapshotNodesForDisplay(
     .flatMap((node) => [node.label, node.value])
     .filter(Boolean)
     .join(" ");
-  for (const node of snapshot.nodes) {
+  for (const node of nodes) {
     if (keep.has(node)) continue;
     // "Own displayed text" = a non-empty `value` (the node's getText()), which
     // is role-agnostic so it catches TextView, TextClock, Chronometer, and
@@ -318,7 +387,73 @@ export function snapshotNodesForDisplay(
     const text = node.label ?? node.value;
     if (text && !seen.includes(text)) keep.add(node);
   }
-  return snapshot.nodes.filter((node) => keep.has(node));
+  return nodes.filter((node) => keep.has(node));
+}
+
+function isOnScreen(
+  node: SnapshotNode,
+  viewport: { width: number; height: number }
+): boolean {
+  const b = node.bounds;
+  if (!b) return true;
+  return b.bottom > 0 && b.top < viewport.height && b.right > 0 && b.left < viewport.width;
+}
+
+// Indent each kept node by its number of kept ancestors, walking the parentIndex
+// chain over the full tree. This re-bases nesting to the displayed tree so culling
+// intermediate containers doesn't leave a staircase. Returns nodes unchanged (no
+// displayDepth set) when parentIndex linkage is absent — the renderer then falls
+// back to its depth-stack.
+function annotateDisplayDepth(
+  kept: SnapshotNode[],
+  allNodes: SnapshotNode[]
+): SnapshotNode[] {
+  if (!allNodes.some((node) => typeof node.parentIndex === "number")) return kept;
+  const byRef = new Map(allNodes.map((node) => [node.ref, node]));
+  const keptRefs = new Set(kept.map((node) => node.ref));
+  const depthOf = (node: SnapshotNode): number => {
+    let depth = 0;
+    let parentIndex = node.parentIndex;
+    let hops = 0;
+    while (typeof parentIndex === "number" && parentIndex >= 0 && hops++ < 1024) {
+      const parent = byRef.get(`@e${parentIndex + 1}`);
+      if (!parent) break;
+      if (keptRefs.has(parent.ref)) depth++;
+      parentIndex = parent.parentIndex;
+    }
+    return depth;
+  };
+  return kept.map((node) => ({ ...node, displayDepth: depthOf(node) }));
+}
+
+// Structured/JSON node list: collapse structural noise but keep the COMPLETE set
+// (on- and off-screen). Viewport culling is a text-presentation concern handled in
+// formatSnapshot — programmatic consumers (MCP, post-state, `--json`) get every
+// collapsed node so nothing is silently dropped.
+export function snapshotNodesForDisplay(
+  snapshot: SnapshotDocument | SnapshotOutput,
+  opts: FormatSnapshotOptions
+): SnapshotNode[] {
+  if (opts.all) return snapshot.nodes;
+  return compactKeep(snapshot.nodes);
+}
+
+// Text-view selection: collapse, then cull off-screen nodes (unless `all`/`offscreen`)
+// and report what was hidden below the fold so the agent knows to scroll.
+function selectForDisplay(
+  snapshot: SnapshotDocument | SnapshotOutput,
+  opts: FormatSnapshotOptions
+): { nodes: SnapshotNode[]; hiddenBelow: SnapshotNode[] } {
+  const base = opts.all ? snapshot.nodes : compactKeep(snapshot.nodes);
+  const viewport = snapshot.viewport;
+  if (opts.all || opts.offscreen || !viewport) {
+    return { nodes: annotateDisplayDepth(base, snapshot.nodes), hiddenBelow: [] };
+  }
+  const onScreen = base.filter((node) => isOnScreen(node, viewport));
+  const hiddenBelow = base.filter(
+    (node) => node.bounds && node.bounds.top >= viewport.height && (node.label || node.value)
+  );
+  return { nodes: annotateDisplayDepth(onScreen, snapshot.nodes), hiddenBelow };
 }
 
 export type SnapshotOutput = Omit<SnapshotDocument, "raw"> & {
@@ -345,24 +480,109 @@ export function snapshotForOutput(
   };
 }
 
-export function formatSnapshot(
-  snapshot: SnapshotDocument | SnapshotOutput,
-  opts: FormatSnapshotOptions = {}
-): string {
-  const options = { header: true, ...opts };
-  const nodes = snapshotNodesForDisplay(snapshot, options);
-  // Indent each node under its nearest displayed ancestor. Nodes arrive in
-  // pre-order DFS with a `depth`; a depth stack turns absolute depths into
-  // relative nesting, so filtering out intermediate nodes doesn't leave gaps —
-  // a kept child simply nests under the nearest kept (shallower) node.
+// Lay a window's nodes out as indented lines. Honors pre-computed displayDepth
+// (kept-ancestor depth) when present so culled intermediates don't leave a
+// staircase; falls back to a depth-stack (turning absolute pre-order depths into
+// relative nesting) for snapshots without parentIndex.
+function renderGroup(groupNodes: SnapshotNode[], options: FormatSnapshotOptions): string[] {
+  if (groupNodes.some((node) => node.displayDepth !== undefined)) {
+    return groupNodes.map(
+      (node) => "  ".repeat(node.displayDepth ?? 0) + formatNode(node, options)
+    );
+  }
   const stack: number[] = [];
-  const lines = nodes.map((node) => {
+  return groupNodes.map((node) => {
     const depth = node.depth ?? 0;
     while (stack.length > 0 && stack[stack.length - 1]! >= depth) stack.pop();
     const indent = "  ".repeat(stack.length);
     stack.push(depth);
     return indent + formatNode(node, options);
   });
+}
+
+function appendScrollHint(lines: string[], hiddenBelow: SnapshotNode[]): void {
+  if (hiddenBelow.length === 0) return;
+  const preview = hiddenBelow
+    .slice(0, 4)
+    .map((node) => quote(truncate(node.label ?? node.value ?? "", 24)))
+    .join(", ");
+  lines.push(
+    `  [${hiddenBelow.length} more below — scroll: ${preview}${hiddenBelow.length > 4 ? ", …" : ""}]`
+  );
+}
+
+// The window holding the foreground activity: prefer windows owned by the
+// component's package (the activity Tiny reports), else the densest window.
+// Returns undefined when no node carries windowId (synthetic/legacy data), so
+// single-window rendering stays unchanged.
+function primaryWindowId(
+  snapshot: SnapshotDocument | SnapshotOutput,
+  nodes: SnapshotNode[]
+): number | undefined {
+  const pkg = snapshot.component?.split("/")[0];
+  const tally = (predicate: (node: SnapshotNode) => boolean): Map<number, number> => {
+    const counts = new Map<number, number>();
+    for (const node of nodes) {
+      if (node.windowId === undefined || !predicate(node)) continue;
+      counts.set(node.windowId, (counts.get(node.windowId) ?? 0) + 1);
+    }
+    return counts;
+  };
+  let counts = pkg ? tally((node) => node.bundleId === pkg) : new Map<number, number>();
+  if (counts.size === 0) counts = tally(() => true);
+  let best: number | undefined;
+  let bestCount = -1;
+  for (const [windowId, count] of counts) {
+    if (count > bestCount) {
+      bestCount = count;
+      best = windowId;
+    }
+  }
+  return best;
+}
+
+export function formatSnapshot(
+  snapshot: SnapshotDocument | SnapshotOutput,
+  opts: FormatSnapshotOptions = {}
+): string {
+  const options = { header: true, ...opts };
+  const { nodes, hiddenBelow } = selectForDisplay(snapshot, options);
+  const primaryWin = primaryWindowId(snapshot, nodes);
+
+  const lines: string[] = [];
+  if (primaryWin === undefined) {
+    lines.push(...renderGroup(nodes, options));
+    appendScrollHint(lines, hiddenBelow);
+  } else {
+    const primary = nodes.filter(
+      (node) => node.windowId === undefined || node.windowId === primaryWin
+    );
+    const foreign = nodes.filter(
+      (node) => node.windowId !== undefined && node.windowId !== primaryWin
+    );
+    lines.push(...renderGroup(primary, options));
+    appendScrollHint(lines, hiddenBelow);
+    // Nodes from other windows (status bar, nav bar, IME, dialogs) are NOT part of
+    // the foreground activity. Group them under a labeled divider, in first-seen
+    // window order, so the agent doesn't read them as part of the current screen.
+    const order: number[] = [];
+    const groups = new Map<number, SnapshotNode[]>();
+    for (const node of foreign) {
+      const windowId = node.windowId!;
+      if (!groups.has(windowId)) {
+        groups.set(windowId, []);
+        order.push(windowId);
+      }
+      groups.get(windowId)!.push(node);
+    }
+    for (const windowId of order) {
+      const group = groups.get(windowId)!;
+      const owner = group[0]?.bundleId ?? `window ${windowId}`;
+      lines.push(`[other window · ${owner}]`);
+      lines.push(...renderGroup(group, options));
+    }
+  }
+
   if (!options.header) return lines.join("\n");
 
   const target = snapshot.appName ?? snapshot.bundleId ?? snapshot.deviceId;

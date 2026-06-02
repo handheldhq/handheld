@@ -1912,6 +1912,8 @@ export function registerControlCommands(program: Command): void {
     .command("snap")
     .description("print Tiny-backed actionable snapshot refs")
     .option("-i, --interactive", "show only actionable refs")
+    .option("--all", "include structural containers + off-screen nodes (full tree)")
+    .option("--offscreen", "include off-screen nodes (skip viewport culling)")
     .option("--bounds", "include node bounds")
     .option("--no-header", "omit snapshot header")
     .option("--raw", "print raw Tiny snapshot JSON")
@@ -1949,7 +1951,9 @@ export function registerControlCommands(program: Command): void {
         }
         if (program.opts().json) {
           const nodes = snapshotNodesForDisplay(snapshot, {
+            all: opts.all,
             interactive: opts.interactive,
+            offscreen: opts.offscreen,
           });
           console.log(JSON.stringify({
             ...snapshot,
@@ -1971,9 +1975,11 @@ export function registerControlCommands(program: Command): void {
           return;
         }
         console.log(formatSnapshot(snapshot, {
+          all: opts.all,
           bounds: opts.bounds,
           header: opts.header,
           interactive: opts.interactive,
+          offscreen: opts.offscreen,
         }));
         if (screenshot) {
           if (!screenshot.ok) {

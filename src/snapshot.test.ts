@@ -75,8 +75,15 @@ describe("Tiny snapshot formatting", () => {
       raw: tinySnapshot,
     });
 
-    expect(formatSnapshot(snapshot, { header: false, interactive: true }))
-      .toContain('@e2 [textinput] label="Search settings" preview="" id="com.android.settings:id/search_action_bar" enabled hittable focused editable');
+    const text = formatSnapshot(snapshot, { header: false, interactive: true });
+    // Actionable node: ref + leaf id (package prefix stripped) + state flags, with
+    // the redundant "enabled" omitted.
+    expect(text).toContain(
+      '@e2 [textinput] label="Search settings" preview="" id="search_action_bar" hittable focused editable'
+    );
+    // Read-only text renders ref-less (no "@eN") with a bare quoted value.
+    expect(text).toContain('[text] "Settings"');
+    expect(text).not.toContain('@e1 [text]');
     // Compact mode keeps the 2 interactive nodes plus the standalone "Settings"
     // text node (not already surfaced in an interactive label) = 3.
     expect(snapshotNodesForDisplay(snapshot, { interactive: true })).toHaveLength(3);
@@ -135,6 +142,9 @@ describe("Tiny snapshot formatting", () => {
     expect(labels).not.toContain("Storage");
     expect(labels).not.toContain("233 kB used");
     expect(labels).not.toContain("Wifi signal full.");
+
+    // --all bypasses collapse and returns every node (structural included).
+    expect(snapshotNodesForDisplay(snapshot, { all: true })).toHaveLength(5);
   });
 
   it("compact mode keys on own displayed text (value), not just role==='text'", () => {
@@ -240,7 +250,8 @@ describe("Tiny snapshot formatting", () => {
     expect(compact.appName).toBe("Settings");
     expect(compact.bundleId).toBe("com.android.settings");
 
-    // interactive:false keeps every node.
+    // The structured node list always collapses (no viewport culling); here all
+    // three nodes survive collapse.
     expect(snapshotForOutput(snapshot, { interactive: false }).nodes).toHaveLength(3);
 
     // The result is still formattable (header + filtered body).
@@ -256,5 +267,139 @@ describe("Tiny snapshot formatting", () => {
     expect(resolveSnapshotRef(snapshot, "@e2")?.stableId).toBe("search");
     expect(resolveSnapshotRef(snapshot, "e3")?.stableId).toBe("network");
     expect(resolveSnapshotRef(snapshot, "@e9")).toBeNull();
+  });
+
+  it("culls off-screen nodes in the text view and surfaces a scroll hint", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        nodes: [
+          // Root/decor clipped to the 1080x2400 display → derives the viewport.
+          {
+            role: "android.widget.FrameLayout",
+            depth: 0,
+            bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+          },
+          {
+            role: "android.widget.Button",
+            text: "On screen",
+            hittable: true,
+            depth: 1,
+            bounds: { left: 0, top: 100, right: 200, bottom: 180 },
+          },
+          {
+            role: "android.widget.Button",
+            text: "Below fold",
+            hittable: true,
+            depth: 1,
+            bounds: { left: 0, top: 2600, right: 200, bottom: 2700 },
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.viewport).toEqual({ width: 1080, height: 2400 });
+
+    const text = formatSnapshot(snapshot, { header: false });
+    expect(text).toContain('@e2 [button] label="On screen"');
+    // The off-screen button isn't rendered as a node line, only summarized.
+    expect(text).not.toMatch(/@e3 \[button\]/);
+    expect(text).toContain("1 more below");
+    expect(text).toContain('"Below fold"'); // appears only inside the scroll hint
+
+    // --offscreen disables culling in the text view.
+    expect(formatSnapshot(snapshot, { header: false, offscreen: true })).toMatch(
+      /@e3 \[button\]/
+    );
+    // The structured node list never culls (both buttons survive collapse).
+    expect(snapshotNodesForDisplay(snapshot, {})).toHaveLength(2);
+  });
+
+  it("indents by kept-ancestor depth (parentIndex), not raw depth staircase", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        nodes: [
+          {
+            role: "androidx.recyclerview.widget.RecyclerView",
+            contentDescription: "List",
+            scrollable: true,
+            parentIndex: -1,
+            depth: 0,
+            bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+          },
+          // Two direct children of the list whose raw depths jump (5, 6). The old
+          // depth-stack would staircase the second to level 2; kept-ancestor depth
+          // keeps both at level 1 since they share the kept root as their parent.
+          {
+            role: "android.widget.Button",
+            text: "Aaa",
+            hittable: true,
+            parentIndex: 0,
+            depth: 5,
+            bounds: { left: 0, top: 100, right: 200, bottom: 180 },
+          },
+          {
+            role: "android.widget.Button",
+            text: "Bbb",
+            hittable: true,
+            parentIndex: 0,
+            depth: 6,
+            bounds: { left: 0, top: 200, right: 200, bottom: 280 },
+          },
+        ],
+      },
+    });
+
+    const lines = formatSnapshot(snapshot, { header: false }).split("\n");
+    const a = lines.find((l) => l.includes('"Aaa"'))!;
+    const b = lines.find((l) => l.includes('"Bbb"'))!;
+    for (const line of [a, b]) {
+      expect(line.startsWith("  ")).toBe(true); // one level under the kept root
+      expect(line.startsWith("    ")).toBe(false); // exactly one — no staircase
+    }
+  });
+
+  it("groups other-window nodes under a labeled divider", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        component: "com.android.settings/com.android.settings.Home",
+        nodes: [
+          // Status-bar clock: a different window owned by System UI.
+          {
+            role: "android.widget.TextView",
+            text: "9:41",
+            bundleId: "com.android.systemui",
+            windowId: 78,
+            parentIndex: -1,
+            depth: 0,
+            bounds: { left: 0, top: 0, right: 200, bottom: 60 },
+          },
+          // Foreground app row.
+          {
+            role: "android.widget.Button",
+            text: "Network & internet",
+            hittable: true,
+            bundleId: "com.android.settings",
+            windowId: 70,
+            parentIndex: -1,
+            depth: 0,
+            bounds: { left: 0, top: 200, right: 1080, bottom: 300 },
+          },
+        ],
+      },
+    });
+
+    const lines = formatSnapshot(snapshot, { header: false }).split("\n");
+    const appIdx = lines.findIndex((l) => l.includes("Network & internet"));
+    const dividerIdx = lines.findIndex((l) => l.includes("other window"));
+    const clockIdx = lines.findIndex((l) => l.includes('"9:41"'));
+    // Foreground node renders first; the foreign window follows under a divider
+    // that names the owning package; the clock sits under that divider.
+    expect(appIdx).toBeGreaterThanOrEqual(0);
+    expect(dividerIdx).toBeGreaterThan(appIdx);
+    expect(lines[dividerIdx]).toContain("com.android.systemui");
+    expect(clockIdx).toBeGreaterThan(dividerIdx);
   });
 });
