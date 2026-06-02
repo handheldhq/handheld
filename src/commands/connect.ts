@@ -88,7 +88,7 @@ export function startBlockedCopy(error: unknown): StartBlockedCopy | null {
         "No pool hardware is available right now. Retry in a few minutes or claim a fresh device.",
       nextSteps: [
         "Wait briefly and retry — pool equipment frees up as other sessions end.",
-        "Or run `handheld devices --create` to claim a new device.",
+        "Or run `handheld create` to claim a new device.",
       ],
     };
   }

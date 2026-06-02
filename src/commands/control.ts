@@ -2429,14 +2429,14 @@ Caveats:
       "after",
       `
 Computes a swipe across the screen center from the device size, so you don't
-have to. Direction is the FINGER direction: \`scroll down\` reveals content above,
-\`scroll up\` reveals content below.
-  handheld scroll up        # reveal content further down the page
+have to. Direction is the CONTENT direction (what you want to bring into view):
+\`scroll down\` reveals content below; \`scroll up\` reveals content above.
+  handheld scroll down       # reveal content further down the page
   handheld scroll down --duration 500
 
 Caveats:
   - The default snap drops off-screen nodes; when you see "[N more below …]",
-    \`scroll up\` then re-snap to bring them on-screen.
+    \`scroll down\` then re-snap to bring them on-screen.
   - For a precise gesture (e.g. a small in-list drag) use \`handheld swipe\`.`
     )
     .action(async (direction: string, opts) => {

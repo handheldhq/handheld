@@ -21,7 +21,7 @@ CONNECT
 
 OBSERVE
   handheld snap                # compact, on-screen, agent-facing tree (default)
-  handheld snap --screenshot   # also save a PNG
+  handheld snap --screenshot   # also save a JPEG screenshot
   handheld snap --all          # full uncollapsed tree incl. off-screen + keyboard
   handheld snap --offscreen    # keep below-the-fold nodes (still collapsed)
   handheld snap --raw|--json   # complete structured node list (never culled)
@@ -151,6 +151,8 @@ const GUIDES: Record<string, string> = {
   selectors: SELECTORS,
   troubleshooting: TROUBLESHOOTING,
 };
+
+export const GUIDE_TOPICS = Object.keys(GUIDES);
 
 const TOPIC_SUMMARY: Array<[string, string]> = [
   ["workflow", "the core connect → snap → act → verify loop and command map"],

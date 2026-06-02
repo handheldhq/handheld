@@ -206,7 +206,9 @@ async function capturePostStateSnapshot(
   // Refresh the cached snapshot so subsequent ref-based actions resolve against
   // the post-action screen, not the pre-action one.
   saveLastSnapshot(snapshot);
-  return snapshotForOutput(snapshot, { interactive: true });
+  // Keep read-only text in the post-action snapshot (results/errors/headings the
+  // caller verifies against); `interactive: true` would drop it.
+  return snapshotForOutput(snapshot, { interactive: false });
 }
 
 /**

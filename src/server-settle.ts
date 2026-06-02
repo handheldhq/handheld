@@ -111,7 +111,7 @@ export async function tryServerSettle(
       });
       saveLastSnapshot(snapshot);
       if (opts.postState) {
-        result.snapshot = snapshotForOutput(snapshot, { interactive: true });
+        result.snapshot = snapshotForOutput(snapshot, { interactive: false });
       }
     } catch {
       // snapshot shaping is best-effort — the gesture already succeeded

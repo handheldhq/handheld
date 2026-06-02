@@ -11,7 +11,7 @@ import { registerRouteCommand } from "./commands/route.js";
 import { registerBillingCommand } from "./commands/billing.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerTeachCommand } from "./commands/teach.js";
-import { registerGuideCommand } from "./commands/guide.js";
+import { registerGuideCommand, GUIDE_TOPICS } from "./commands/guide.js";
 import { parseSettleMs } from "./action-wait.js";
 
 const program = new Command()
@@ -58,6 +58,18 @@ program.action(async () => {
 
   program.help();
 });
+
+// Make `handheld help <x>` always useful: a guide topic routes to `guide <topic>`,
+// any other word routes to that command's `--help` (the bare program otherwise
+// rejects `help <command>` as extra args). Bare `handheld help` is left to commander.
+const argv = process.argv;
+if (argv[2] === "help" && argv[3] && !argv[3].startsWith("-")) {
+  if (GUIDE_TOPICS.includes(argv[3].toLowerCase())) {
+    argv.splice(2, 2, "guide", argv[3]);
+  } else {
+    argv.splice(2, 2, argv[3], "--help");
+  }
+}
 
 program.parseAsync().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));

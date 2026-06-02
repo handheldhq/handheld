@@ -82,8 +82,9 @@ Gateway operations that provision or list **cloud** phones (`init`, `create`,
 ## Device control
 
 ```bash
-handheld snap -i                        # compact view: actionable refs (@e1, ...) + readable text
-handheld snap -i --screenshot           # refs plus a PNG screenshot file
+handheld snap                           # compact view: actionable refs (@e1, ...) + readable text
+handheld snap -i                        # leaner: actionable refs only (drops read-only text)
+handheld snap --screenshot              # also save a JPEG screenshot file
 handheld tap 540 960                    # tap at coordinates
 handheld tap @e2                        # tap cached snapshot ref
 handheld tap 'id=search_action_bar'     # durable selector: tap by resource-id

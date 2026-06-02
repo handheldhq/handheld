@@ -436,8 +436,9 @@ const TOOLS = [
         interactive: {
           type: "boolean",
           description:
-            "Default true: return only actionable nodes plus standalone readable text. " +
-            "Set false to also include structural/container nodes.",
+            "Default false: return actionable nodes PLUS read-only text (headings, results, errors). " +
+            "Set true to return only actionable nodes (drops read-only text). " +
+            "Structural containers are always collapsed and are not exposed by this flag.",
         },
         raw: {
           type: "boolean",
@@ -2057,7 +2058,8 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
           return jsonContent({
             ...snapshot,
             nodes: snapshotNodesForDisplay(snapshot, {
-              interactive: args?.interactive !== false,
+              // Default keeps read-only text; interactive:true returns actionable-only.
+              interactive: args?.interactive === true,
             }),
             raw: args?.raw ? snapshot.raw : undefined,
             screenshot: screenshot?.ok

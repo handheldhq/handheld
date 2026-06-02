@@ -1,5 +1,5 @@
 import type { SnapshotDocument, SnapshotNode } from "./snapshot.js";
-import { nodeCenter, resolveSelector, resolveSnapshotRef } from "./snapshot.js";
+import { isInteractiveNode, nodeCenter, resolveSelector, resolveSnapshotRef } from "./snapshot.js";
 
 export type KeyInput = string | number;
 
@@ -102,7 +102,10 @@ export function pointFromSnapshotTarget(
   target: string
 ): { x: number; y: number } | null {
   const node = resolveTargetNode(snapshot, target);
-  return node ? nodeCenter(node) : null;
+  // Only actionable nodes are tap targets — a ref/selector that resolves to
+  // read-only text is not tappable (use `tap <x> <y>` for raw coordinates).
+  if (!node || !isInteractiveNode(node)) return null;
+  return nodeCenter(node);
 }
 
 export function packageListCommand(includeSystem = true): string {

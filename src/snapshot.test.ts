@@ -76,7 +76,8 @@ describe("Tiny snapshot formatting", () => {
       raw: tinySnapshot,
     });
 
-    const text = formatSnapshot(snapshot, { header: false, interactive: true });
+    // Default view (no -i): keeps read-only text.
+    const text = formatSnapshot(snapshot, { header: false });
     // Actionable node: ref + TitleCase role + name + leaf id + actions. A focused
     // node gets a "▶" bullet and an explicit `focused` attr.
     expect(text).toContain(
@@ -85,8 +86,15 @@ describe("Tiny snapshot formatting", () => {
     // Read-only text renders ref-less with a bare quoted value.
     expect(text).toContain('- Text "Settings"');
     expect(text).not.toContain('@e1');
-    // Compact mode keeps the 2 interactive nodes plus the standalone "Settings" text = 3.
-    expect(snapshotNodesForDisplay(snapshot, { interactive: true })).toHaveLength(3);
+    // Default keeps the 2 interactive nodes plus the standalone "Settings" text = 3.
+    expect(snapshotNodesForDisplay(snapshot, {})).toHaveLength(3);
+    // `-i` (interactive/actionable-only) drops the read-only "Settings" text → 2.
+    const lean = snapshotNodesForDisplay(snapshot, { interactive: true });
+    expect(lean).toHaveLength(2);
+    expect(lean.some((node) => (node.label ?? node.value) === "Settings")).toBe(false);
+    expect(formatSnapshot(snapshot, { header: false, interactive: true })).not.toContain(
+      'Text "Settings"'
+    );
   });
 
   it("compact mode keeps unseen text but drops layout noise and duplicate text", () => {
@@ -131,7 +139,7 @@ describe("Tiny snapshot formatting", () => {
       },
     });
 
-    const kept = snapshotNodesForDisplay(snapshot, { interactive: true });
+    const kept = snapshotNodesForDisplay(snapshot, {}); // default view keeps read-only text
     // The hittable row resolves title + subtitle from its two child texts, which are
     // then consumed (not rendered as their own lines).
     const row = kept.find((node) => node.hittable)!;
@@ -182,9 +190,7 @@ describe("Tiny snapshot formatting", () => {
       },
     });
 
-    const labels = snapshotNodesForDisplay(snapshot, { interactive: true }).map(
-      (node) => node.label
-    );
+    const labels = snapshotNodesForDisplay(snapshot, {}).map((node) => node.label); // default keeps text
     expect(labels).toContain("3:45"); // textclock kept via value
     expect(labels).toContain("Article body text"); // webview view kept via value
     expect(labels).not.toContain("Home"); // contentDescription-only view dropped
@@ -450,6 +456,9 @@ describe("Tiny snapshot formatting", () => {
     expect(resolveSelector(snapshot, "label=network & internet")?.ref).toBe("@e1");
     // text= matches the node's displayed text.
     expect(resolveSelector(snapshot, "text=Search")?.ref).toBe("@e4");
+    // A selector matching ONLY read-only text does NOT resolve — read-only is not a
+    // tap target (the subtitle text belongs to a consumed, non-actionable node).
+    expect(resolveSelector(snapshot, "text=Mobile, Wi‑Fi, hotspot")).toBeNull();
     // misses + non-selectors.
     expect(resolveSelector(snapshot, "id=nope")).toBeNull();
     expect(resolveSelector(snapshot, "@e1")).toBeNull();

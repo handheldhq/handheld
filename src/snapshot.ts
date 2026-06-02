@@ -321,7 +321,7 @@ function deriveViewport(
 // Actionable = the agent can DO something here. Deliberately excludes
 // focusable/focused: on Android focus is a side effect of tapping, not a discrete
 // action, so focus-only containers collapse away as structure.
-function isInteractiveNode(node: SnapshotNode): boolean {
+export function isInteractiveNode(node: SnapshotNode): boolean {
   return (
     node.hittable ||
     node.editable ||
@@ -415,8 +415,14 @@ function formatNode(node: SnapshotNode, opts: FormatSnapshotOptions): string {
 // Collapse structural noise: keep interactive nodes plus standalone readable text
 // the agent would otherwise be blind to. Shared by the JSON node list and the text
 // view. (Comment below documents the readable-text rule.)
-function compactKeep(nodes: SnapshotNode[]): SnapshotNode[] {
+function compactKeep(
+  nodes: SnapshotNode[],
+  opts: { actionableOnly?: boolean } = {}
+): SnapshotNode[] {
   const keep = new Set(nodes.filter(isInteractiveNode));
+  // `-i` / actionableOnly: only the tappable/typeable nodes — skip the readable-text
+  // pass below (this is what `snap -i` returns).
+  if (opts.actionableOnly) return nodes.filter((node) => keep.has(node));
   // Compact mode keeps interactive nodes AND standalone readable text the agent
   // would otherwise be blind to (headings, descriptions, displayed values, error
   // text). Only `role === "text"` qualifies — labeled layout containers
@@ -488,7 +494,7 @@ export function snapshotNodesForDisplay(
   opts: FormatSnapshotOptions
 ): SnapshotNode[] {
   if (opts.all) return snapshot.nodes;
-  return compactKeep(snapshot.nodes);
+  return compactKeep(snapshot.nodes, { actionableOnly: !!opts.interactive });
 }
 
 // Text-view selection: collapse, then cull off-screen nodes (unless `all`/`offscreen`)
@@ -497,7 +503,9 @@ function selectForDisplay(
   snapshot: SnapshotDocument | SnapshotOutput,
   opts: FormatSnapshotOptions
 ): { nodes: SnapshotNode[]; hiddenBelow: SnapshotNode[] } {
-  const base = opts.all ? snapshot.nodes : compactKeep(snapshot.nodes);
+  const base = opts.all
+    ? snapshot.nodes
+    : compactKeep(snapshot.nodes, { actionableOnly: !!opts.interactive });
   const viewport = snapshot.viewport;
   if (opts.all || opts.offscreen || !viewport) {
     return { nodes: annotateDisplayDepth(base, snapshot.nodes), hiddenBelow: [] };
@@ -527,7 +535,7 @@ export function snapshotForOutput(
 ): SnapshotOutput {
   return {
     ...snapshot,
-    nodes: snapshotNodesForDisplay(snapshot, { interactive: opts.interactive ?? true }),
+    nodes: snapshotNodesForDisplay(snapshot, { interactive: opts.interactive ?? false }),
     raw: undefined,
     totalNodeCount: snapshot.nodes.length,
   };
@@ -731,7 +739,10 @@ export function resolveSelector(
   };
   const hits = snapshot.nodes.filter(matches);
   if (hits.length === 0) return null;
-  return hits.find((node) => node.hittable) ?? hits.find(isInteractiveNode) ?? hits[0]!;
+  // Only resolve to an ACTIONABLE node — read-only text is not an action target,
+  // so a selector that matches only read-only nodes returns null (the caller then
+  // reports "did not resolve" rather than silently tapping a label).
+  return hits.find((node) => node.hittable) ?? hits.find(isInteractiveNode) ?? null;
 }
 
 export function nodeCenter(node: SnapshotNode): { x: number; y: number } | null {
