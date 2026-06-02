@@ -14,7 +14,6 @@ const tiny: TinyState = {
   baseUrl: "http://127.0.0.1:6792",
   port: 6792,
   status: "ready",
-  tokenFile: "/tmp/tiny.token",
 };
 
 beforeEach(() => tinySetTextMock.mockReset());

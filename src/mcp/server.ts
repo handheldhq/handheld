@@ -50,6 +50,7 @@ import {
   ensureTinyToken,
   getTinySnapshot,
   getTinySignature,
+  getTinyStatus,
   startTinyHelper,
   tinyDeviceInstallCommand,
   tinyDeviceRequestCommand,
@@ -57,6 +58,7 @@ import {
   type TinyInputOptions,
   tinyInputBody,
   tinySignaturePath,
+  tinySupportsRequiredAgentShape,
   tinySetTextBody,
   tinyWaitForChangePath,
   tinyWaitForStablePath,
@@ -1345,10 +1347,18 @@ async function waitForMcpSnapshotCondition(input: {
 }
 
 async function ensureTinyState(connection: Connection): Promise<TinyState> {
-  if (connection.tiny) return connection.tiny;
+  if (connection.tiny) {
+    try {
+      if (tinySupportsRequiredAgentShape(await getTinyStatus(connection.tiny))) {
+        return connection.tiny;
+      }
+    } catch {
+      // Fall through to bootstrap/reinstall when local ADB is available.
+    }
+  }
   const serial = connection.adb?.serial;
   if (!serial) {
-    throw new Error("Snapshot requires Tiny helper or ADB. Reconnect with ADB enabled.");
+    throw new Error("Snapshot requires a current Tiny helper or ADB. Reconnect with ADB enabled.");
   }
   const tiny = await startTinyHelper({ serial });
   saveConnection({ ...connection, tiny });
@@ -1380,21 +1390,16 @@ async function mcpLiveForegroundSignature(input: {
   relay: RelayClient | null;
 }): Promise<SnapshotForegroundSignature> {
   let signature: SnapshotForegroundSignature;
-  if (input.conn.tiny) {
-    signature = mcpSignatureFromRaw(
-      await getTinySignature(input.conn.tiny, {
-        previousEventSeq: input.previousEventSeq,
-      }) as Record<string, unknown>
-    );
-    return await completeMcpLiveForegroundSignature(signature, input.relay, input.adb);
-  }
-
-  if (input.conn.adb?.serial) {
-    const tiny = await ensureTinyState(input.conn);
-    signature = mcpSignatureFromRaw(
-      await getTinySignature(tiny, { previousEventSeq: input.previousEventSeq }) as Record<string, unknown>
-    );
-    return await completeMcpLiveForegroundSignature(signature, input.relay, input.adb);
+  if (input.conn.tiny || input.conn.adb?.serial) {
+    try {
+      const tiny = await ensureTinyState(input.conn);
+      signature = mcpSignatureFromRaw(
+        await getTinySignature(tiny, { previousEventSeq: input.previousEventSeq }) as Record<string, unknown>
+      );
+      return await completeMcpLiveForegroundSignature(signature, input.relay, input.adb);
+    } catch (error) {
+      if (!input.relay && !input.adb) throw error;
+    }
   }
 
   const tokenState = await ensureMcpDeviceTiny({
@@ -1730,13 +1735,7 @@ function mcpChunkNextOffset(value: Record<string, unknown>): number | null {
 }
 
 function mcpTinyStatusSupportsAgentShape(status: Record<string, unknown>): boolean {
-  const capabilities = status.capabilities;
-  return Boolean(
-    capabilities &&
-      typeof capabilities === "object" &&
-      (capabilities as Record<string, unknown>).observe === true &&
-      (capabilities as Record<string, unknown>).responseChunks === true
-  );
+  return tinySupportsRequiredAgentShape(status);
 }
 
 function isTransientMcpTinyRequestError(error: unknown): boolean {
@@ -2562,8 +2561,26 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
           }
           if (condition === "stable") {
             const startedAt = Date.now();
-            const tiny = await ensureTinyState(conn);
-            const result = await waitTinyStable(tiny, { timeoutMs });
+            let result: Record<string, unknown>;
+            try {
+              const tiny = await ensureTinyState(conn);
+              result = await waitTinyStable(tiny, { timeoutMs });
+            } catch (error) {
+              if (!relay && !adb) throw error;
+              const tokenState = await ensureMcpDeviceTiny({
+                adb,
+                api: () => new HandheldApiClient(),
+                conn,
+                relay,
+              });
+              result = await readMcpTinyJsonFromDevice({
+                adb,
+                maxTimeSec: Math.ceil(timeoutMs / 1000) + 6,
+                path: tinyWaitForStablePath({ timeoutMs }),
+                relay,
+                token: tokenState.token,
+              });
+            }
             // Honor Tiny's verdict: stable:false means it sampled until the
             // device timeout without the UI going quiet — not a success.
             return jsonContent({

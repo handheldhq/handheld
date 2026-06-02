@@ -1,6 +1,7 @@
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   writeFileSync,
   statSync,
   chmodSync,
@@ -88,5 +89,43 @@ describe("config permission repair", () => {
     });
 
     expect(state.getActiveConnection()).toBeUndefined();
+  });
+
+  it("strips legacy Tiny tokenFile from connection cache reads and writes", async () => {
+    mkdirSync(muHome, { recursive: true });
+    const connectionsPath = join(muHome, "connections.json");
+    writeFileSync(
+      connectionsPath,
+      JSON.stringify([
+        {
+          adb: { serial: "emulator-5554", sshPid: 0, tunnelPort: 6792 },
+          connectedAt: new Date(0).toISOString(),
+          deviceId: "emulator-5554",
+          local: true,
+          padCode: "",
+          relay: { connected: false, relayUrl: "" },
+          sessionId: "local",
+          tiny: {
+            baseUrl: "http://127.0.0.1:6792",
+            port: 6792,
+            status: "ready",
+            tokenFile: "/tmp/stale-token",
+          },
+        },
+      ]),
+    );
+
+    const state = await import("./state.js");
+    const [connection] = state.getConnections();
+
+    expect(connection?.tiny).toEqual({
+      baseUrl: "http://127.0.0.1:6792",
+      port: 6792,
+      status: "ready",
+    });
+
+    state.saveConnection(connection!);
+
+    expect(readFileSync(connectionsPath, "utf8")).not.toContain("tokenFile");
   });
 });

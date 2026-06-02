@@ -55,7 +55,6 @@ function connectionWithTiny(): Connection {
       baseUrl: "http://127.0.0.1:6792",
       port: 6792,
       status: "ready",
-      tokenFile: "/tmp/tiny.token",
     },
     connectedAt: "1970-01-01T00:00:00.000Z",
   };

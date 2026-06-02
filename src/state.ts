@@ -56,7 +56,12 @@ export interface TinyState {
   baseUrl: string;
   port: number;
   status: string;
-  tokenFile: string;
+  /**
+   * Legacy connections.json entries may still include tokenFile. New code ignores
+   * it and omits it on write; Tiny auth is a fixed in-process token because the
+   * real boundary is device/relay access.
+   */
+  tokenFile?: string;
 }
 
 export interface Connection {
@@ -196,9 +201,18 @@ export function setConfig(updates: Partial<HandheldConfig>): HandheldConfig {
 }
 
 // Connections
+export function sanitizeConnection(conn: Connection): Connection {
+  if (!conn.tiny) return { ...conn };
+  const { baseUrl, port, status } = conn.tiny;
+  return {
+    ...conn,
+    tiny: { baseUrl, port, status },
+  };
+}
+
 export function getConnections(): Connection[] {
   repairExistingPermissions();
-  return readJson<Connection[]>(CONNECTIONS_PATH, []);
+  return readJson<Connection[]>(CONNECTIONS_PATH, []).map(sanitizeConnection);
 }
 
 export function getConnection(deviceId: string): Connection | undefined {
@@ -218,15 +232,15 @@ export function saveConnection(conn: Connection): void {
   const connections = getConnections().filter(
     (c) => c.deviceId !== conn.deviceId
   );
-  connections.push(conn);
-  writeJson(CONNECTIONS_PATH, connections);
+  connections.push(sanitizeConnection(conn));
+  writeJson(CONNECTIONS_PATH, connections.map(sanitizeConnection));
 }
 
 export function removeConnection(deviceId: string): void {
   const connections = getConnections().filter(
     (c) => c.deviceId !== deviceId
   );
-  writeJson(CONNECTIONS_PATH, connections);
+  writeJson(CONNECTIONS_PATH, connections.map(sanitizeConnection));
 }
 
 // SSH keys

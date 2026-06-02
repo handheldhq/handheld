@@ -18,7 +18,7 @@ export function requireApiKey(): string {
   const config = getConfig();
   if (!config.apiKey) {
     throw new AuthError(
-      "No API key configured. Run `handheld init` first."
+      "No API key configured. Set HANDHELD_API_KEY for cloud devices, or run `handheld login` to store a local key."
     );
   }
   return config.apiKey;

@@ -7,17 +7,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 describe("config command secret display", () => {
   let home: string;
   let originalHome: string | undefined;
+  let originalHandheldApiKey: string | undefined;
+  let originalMobileUseApiKey: string | undefined;
 
   beforeEach(() => {
     originalHome = process.env.HOME;
+    originalHandheldApiKey = process.env.HANDHELD_API_KEY;
+    originalMobileUseApiKey = process.env.MOBILEUSE_API_KEY;
     home = mkdtempSync(join(tmpdir(), "handheld-auth-config-test-"));
     process.env.HOME = home;
+    delete process.env.HANDHELD_API_KEY;
+    delete process.env.MOBILEUSE_API_KEY;
     vi.resetModules();
   });
 
   afterEach(() => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalHandheldApiKey === undefined) delete process.env.HANDHELD_API_KEY;
+    else process.env.HANDHELD_API_KEY = originalHandheldApiKey;
+    if (originalMobileUseApiKey === undefined) delete process.env.MOBILEUSE_API_KEY;
+    else process.env.MOBILEUSE_API_KEY = originalMobileUseApiKey;
     rmSync(home, { force: true, recursive: true });
     vi.restoreAllMocks();
     vi.resetModules();
@@ -48,6 +58,16 @@ describe("config command secret display", () => {
     expect(output).not.toContain(fullKey);
   });
 
+  it("prints config get api-key raw when explicitly requested", async () => {
+    const fullKey = "muk_secret_value_123456";
+    const state = await import("../state.js");
+    state.setConfig({ apiKey: fullKey });
+
+    const output = await runConfig(["get", "api-key", "--raw"]);
+
+    expect(output).toBe(fullKey);
+  });
+
   it("masks apiKey when dumping the full config", async () => {
     const fullKey = "muk_secret_value_123456";
     const state = await import("../state.js");
@@ -59,5 +79,27 @@ describe("config command secret display", () => {
     expect(parsed.apiKey).toBe("muk_secr...");
     expect(output).not.toContain(fullKey);
     expect(parsed.apiUrl).toBe("https://api.test");
+  });
+
+  it("resolves API keys from env before saved config and reports the source", async () => {
+    const state = await import("../state.js");
+    state.setConfig({ apiKey: "muk_config_value" });
+    process.env.HANDHELD_API_KEY = "muk_env_value";
+
+    const auth = await import("./auth.js");
+
+    expect(auth.configuredApiAuth()).toEqual({
+      apiKey: "muk_env_value",
+      source: "env",
+    });
+    expect(auth.configuredApiKey()).toBe("muk_env_value");
+  });
+
+  it("points missing cloud auth at env-first setup", async () => {
+    const auth = await import("../auth.js");
+
+    expect(() => auth.requireApiKey()).toThrow(
+      "No API key configured. Set HANDHELD_API_KEY for cloud devices, or run `handheld login` to store a local key."
+    );
   });
 });

@@ -1,14 +1,7 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { HANDHELD_HOME } from "./state.js";
 import { findFreePort, probePort } from "./transport/adb/tunnel.js";
 
 export const TINY_PACKAGE = "com.example.tinysnapshot.v2";
@@ -24,7 +17,6 @@ export interface TinyHelperState {
   baseUrl: string;
   port: number;
   status: string;
-  tokenFile: string;
 }
 
 interface AdbResult {
@@ -136,37 +128,19 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function tokenFileForPort(port: number): string {
-  mkdirSync(HANDHELD_HOME, { recursive: true, mode: 0o700 });
-  return resolve(HANDHELD_HOME, `tiny-${port}.token`);
-}
-
 // Tiny binds 127.0.0.1:6792 on the device, so the only ways to reach it
 // (adb-forward, on-device shell) already require device access — the token is
 // NOT a security boundary. It used to be random per instrumentation-start +
-// stored in a file, which caused 403 churn whenever Tiny was (re)started by a
-// different session/client (the stored token then mismatched). A fixed,
-// well-known value means every client/session agrees without coordination, so
-// the token is never a moving part. Device access (adb/relay) remains the real
-// auth boundary, exactly as when controlling the device directly.
+// stored in ~/.handheld, which caused 403 churn whenever Tiny was (re)started
+// by a different session/client and left stale connection records behind. A
+// fixed, well-known in-process value means every client/session agrees without
+// coordination, so the token is never persisted state. Device access (adb/relay)
+// remains the real auth boundary, exactly as when controlling the device
+// directly.
 export const FIXED_TINY_TOKEN = "mu-tiny-localhost-v1";
 
-export function ensureTinyToken(
-  port = TINY_DEVICE_PORT
-): { token: string; tokenFile: string } {
-  const tokenFile = tokenFileForPort(port);
-  // Keep the on-disk token file in sync (the direct-HTTP path reads it), but
-  // always pin it to the fixed value — never return a stale random token.
-  try {
-    const existing = existsSync(tokenFile) ? readFileSync(tokenFile, "utf8").trim() : "";
-    if (existing !== FIXED_TINY_TOKEN) {
-      writeFileSync(tokenFile, `${FIXED_TINY_TOKEN}\n`, { mode: 0o600 });
-      chmodSync(tokenFile, 0o600);
-    }
-  } catch {
-    // best-effort; the token value is fixed regardless of the file
-  }
-  return { token: FIXED_TINY_TOKEN, tokenFile };
+export function ensureTinyToken(): { token: string } {
+  return { token: FIXED_TINY_TOKEN };
 }
 
 export function tinyDeviceInstallCommand(apkPath: string): string {
@@ -413,7 +387,7 @@ export async function startTinyHelper(input: {
 }): Promise<TinyHelperState> {
   const port = input.port ?? (await preferredTinyPort());
   const baseUrl = `http://127.0.0.1:${port}`;
-  const { token, tokenFile } = ensureTinyToken(port);
+  const { token } = ensureTinyToken();
 
   adb(input.serial, ["forward", "--remove", `tcp:${port}`]);
   requireAdb(input.serial, ["forward", `tcp:${port}`, `tcp:${TINY_DEVICE_PORT}`]);
@@ -431,7 +405,6 @@ export async function startTinyHelper(input: {
         baseUrl,
         port,
         status: typeof status.status === "string" ? status.status : "ready",
-        tokenFile,
       };
     }
   } catch {}
@@ -444,7 +417,6 @@ export async function startTinyHelper(input: {
         baseUrl,
         port,
         status: typeof status.status === "string" ? status.status : "ready",
-        tokenFile,
       };
     }
   } catch {}
@@ -453,71 +425,63 @@ export async function startTinyHelper(input: {
   startTinyInstrumentation(input.serial, token);
 
   const status = await waitForTinyStatus(baseUrl, token);
+  if (!tinySupportsRequiredAgentShape(status)) {
+    throw new Error("Tiny helper does not support required agent capabilities");
+  }
   return {
     baseUrl,
     port,
     status: typeof status.status === "string" ? status.status : "ready",
-    tokenFile,
   };
 }
 
 export async function getTinyStatus(input: {
   baseUrl: string;
-  tokenFile: string;
 }): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
-  return await fetchTinyStatus(input.baseUrl, token, 3_000);
+  return await fetchTinyStatus(input.baseUrl, FIXED_TINY_TOKEN, 3_000);
 }
 
 export async function getTinySnapshot(input: {
   baseUrl: string;
-  tokenFile: string;
 }): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     path: `${TINY_API_PREFIX}/snapshot`,
     timeoutMs: 10_000,
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }
 
 export async function getTinySignature(input: {
   baseUrl: string;
-  tokenFile: string;
 }, opts: { previousEventSeq?: number } = {}): Promise<TinyForegroundSignature> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     path: tinySignaturePath(opts),
     timeoutMs: 5_000,
-    token,
+    token: FIXED_TINY_TOKEN,
   }) as TinyForegroundSignature;
 }
 
 export async function waitTinyStable(input: {
   baseUrl: string;
-  tokenFile: string;
 }, opts: TinyStableWaitOptions = {}): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     path: tinyWaitForStablePath(opts),
     timeoutMs: tinyRequestTimeoutMs(opts),
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }
 
 export async function waitTinyChange(input: {
   baseUrl: string;
-  tokenFile: string;
 }, opts: TinyChangeWaitOptions = {}): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     path: tinyWaitForChangePath(opts),
     timeoutMs: tinyRequestTimeoutMs(opts),
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }
 
@@ -549,15 +513,13 @@ export function tinySetTextBody(opts: TinySetTextOptions): string {
 
 export async function tinySetText(input: {
   baseUrl: string;
-  tokenFile: string;
 }, opts: TinySetTextOptions): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     body: tinySetTextBody(opts),
     path: `${TINY_API_PREFIX}/setText`,
     timeoutMs: 8_000,
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }
 
@@ -617,15 +579,13 @@ export function tinyInputTimeoutMs(opts: TinyInputOptions): number {
  * `changed` + `settle` metadata + the fresh post-action `snapshot`. */
 export async function tinyInput(input: {
   baseUrl: string;
-  tokenFile: string;
 }, opts: TinyInputOptions): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     body: tinyInputBody(opts),
     path: `${TINY_API_PREFIX}/input`,
     timeoutMs: tinyInputTimeoutMs(opts),
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }
 
@@ -635,9 +595,7 @@ export async function tinyInput(input: {
  * device-shell too. */
 export async function tinyScreenshot(input: {
   baseUrl: string;
-  tokenFile: string;
 }, opts: { format?: string; quality?: number } = {}): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   const params = new URLSearchParams();
   if (opts.format) params.set("format", opts.format);
   if (opts.quality !== undefined) params.set("quality", String(opts.quality));
@@ -646,7 +604,7 @@ export async function tinyScreenshot(input: {
     baseUrl: input.baseUrl,
     path: `${TINY_API_PREFIX}/screenshot${q ? `?${q}` : ""}`,
     timeoutMs: 20_000,
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }
 
@@ -656,15 +614,13 @@ export async function tinyScreenshot(input: {
  */
 export async function tinyClipboardSet(input: {
   baseUrl: string;
-  tokenFile: string;
 }, text: string): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     body: JSON.stringify({ text }),
     path: `${TINY_API_PREFIX}/clipboard`,
     timeoutMs: 5_000,
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }
 
@@ -675,13 +631,11 @@ export async function tinyClipboardSet(input: {
  */
 export async function tinyClipboardGet(input: {
   baseUrl: string;
-  tokenFile: string;
 }): Promise<Record<string, unknown>> {
-  const token = readFileSync(input.tokenFile, "utf8").trim();
   return await fetchTinyJson({
     baseUrl: input.baseUrl,
     path: `${TINY_API_PREFIX}/clipboard`,
     timeoutMs: 5_000,
-    token,
+    token: FIXED_TINY_TOKEN,
   });
 }

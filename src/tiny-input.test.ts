@@ -67,11 +67,10 @@ describe("tinySupportsInput", () => {
 
 // Opt-in live integration against a running Tiny (the new layoutDigest APK).
 // Enable with: HANDHELD_LIVE_TINY=1 HANDHELD_LIVE_TINY_BASEURL=http://localhost:6795 \
-//   HANDHELD_LIVE_TINY_TOKEN_FILE=/tmp/tiny5554.token HANDHELD_LIVE_TINY_SERIAL=emulator-5554
+//   HANDHELD_LIVE_TINY_SERIAL=emulator-5554
 const live = process.env.HANDHELD_LIVE_TINY === "1";
 describe.runIf(live)("tinyInput (live device)", () => {
   const baseUrl = process.env.HANDHELD_LIVE_TINY_BASEURL ?? "http://localhost:6795";
-  const tokenFile = process.env.HANDHELD_LIVE_TINY_TOKEN_FILE ?? "/tmp/tiny5554.token";
   const serial = process.env.HANDHELD_LIVE_TINY_SERIAL ?? "emulator-5554";
   const adb = (...args: string[]) =>
     execFileSync("adb", ["-s", serial, ...args], { encoding: "utf8" });
@@ -84,7 +83,7 @@ describe.runIf(live)("tinyInput (live device)", () => {
     adb("shell", "am", "start", "-a", "android.settings.SETTINGS");
     await new Promise((r) => setTimeout(r, 1800));
     const resp = await tinyInput(
-      { baseUrl, tokenFile },
+      { baseUrl },
       { type: "swipe", x1: 540, y1: 1700, x2: 540, y2: 700, durationMs: 300, settle: true, settleTimeoutMs: 1800 }
     );
     expect(resp.ok).toBe(true);
@@ -100,7 +99,7 @@ describe.runIf(live)("tinyInput (live device)", () => {
     adb("shell", "am", "start", "-a", "android.settings.SETTINGS");
     await new Promise((r) => setTimeout(r, 1500));
     const resp = await tinyInput(
-      { baseUrl, tokenFile },
+      { baseUrl },
       { type: "tap", x: 12, y: 300, settle: true, settleTimeoutMs: 1500 }
     );
     expect(resp.ok).toBe(true);

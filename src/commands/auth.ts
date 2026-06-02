@@ -95,17 +95,28 @@ async function postJson<T>(
   return data as T;
 }
 
+export type ConfiguredApiAuth = {
+  apiKey: string;
+  source: "env" | "config";
+};
+
 /**
- * An already-available API key — from `HANDHELD_API_KEY` / `MOBILEUSE_API_KEY`
- * env or saved config — or null. Unlike `requireApiKey` it never throws. Lets
- * `init` skip the interactive browser sign-in when a key is already present.
+ * An already-available API key, from env first or legacy saved config, or null.
+ * Unlike requireApiKey it never throws. Lets init skip browser sign-in without
+ * copying env-sourced secrets into config.json.
  */
-export function configuredApiKey(): string | null {
+export function configuredApiAuth(): ConfiguredApiAuth | null {
   const envKey =
     process.env.HANDHELD_API_KEY ?? process.env.MOBILEUSE_API_KEY ?? null;
-  if (envKey && envKey.trim()) return envKey.trim();
+  if (envKey && envKey.trim()) {
+    return { apiKey: envKey.trim(), source: "env" };
+  }
   const saved = getConfig().apiKey;
-  return saved && saved.trim() ? saved.trim() : null;
+  return saved && saved.trim() ? { apiKey: saved.trim(), source: "config" } : null;
+}
+
+export function configuredApiKey(): string | null {
+  return configuredApiAuth()?.apiKey ?? null;
 }
 
 async function reportDeviceCodeHandoff(input: {
@@ -376,13 +387,13 @@ Arg grammar:
   handheld config set <key> <value>     # key: api-key | api-url | default-device | output
 
 Examples:
-  handheld config set api-key hk_live_...      # store a key instead of using the env var
+  handheld config set api-key hk_live_...      # optional legacy convenience; env is preferred
   handheld config set default-device prof_abc  # so bare \`connect\`/\`run\` target this device
   handheld config set output json              # default every command to JSON
 
 Caveats:
   - Values are written to ~/.handheld/config.json. The api-key is masked when printed back by \`config get\`.
-  - Setting api-key here is the non-interactive alternative to \`handheld login\`.`
+  - For agents/CI, prefer HANDHELD_API_KEY so the key never has to be written to disk.`
     )
     .action((key: string, value: string) => {
       const keyMap: Record<string, string> = {
@@ -406,20 +417,23 @@ Caveats:
   config
     .command("get [key]")
     .description("show config values (all keys, or one; api-key is masked)")
+    .option("--raw", "print api-key unmasked when requesting that key explicitly")
     .addHelpText(
       "after",
       `
 Arg grammar:
-  handheld config get [key]     # omit key to dump all (api-key masked)
+  handheld config get [key] [--raw]     # omit key to dump all (api-key masked)
 
 Examples:
   handheld config get                  # show every configured value
   handheld config get default-device   # print just the default device id
+  handheld config get api-key --raw    # print a stored legacy key only when needed
 
 Caveats:
-  - "Not set: <key>" means the value is absent — set it with \`handheld config set <key> <value>\` or sign in with \`handheld login\`.`
+  - "Not set: <key>" means the value is absent — set HANDHELD_API_KEY for cloud auth, set the config value, or sign in with \`handheld login\`.
+  - --raw only affects \`api-key\` when requested explicitly; full config dumps keep secrets masked.`
     )
-    .action((key?: string) => {
+    .action((key: string | undefined, options: { raw?: boolean }) => {
       const cfg = getConfig();
       if (key) {
         const keyMap: Record<string, string> = {
@@ -429,10 +443,11 @@ Caveats:
           output: "output",
         };
         const val = cfg[keyMap[key] as keyof typeof cfg];
-        if (val) console.log(key === "api-key" ? maskApiKey(String(val)) : val);
-        else {
+        if (val) {
+          console.log(key === "api-key" && !options.raw ? maskApiKey(String(val)) : val);
+        } else {
           console.error(`Not set: ${key}`);
-          console.error("Hint: set it with `handheld config set " + key + " <value>` (or run `handheld login` to populate api-key/api-url).");
+          console.error("Hint: for cloud auth set HANDHELD_API_KEY, or use `handheld login` / `handheld config set " + key + " <value>`.");
         }
       } else {
         // Show all (mask API key)
@@ -460,13 +475,13 @@ Arg grammar:
   handheld login [--api-url <url>] [--manual] [--no-open]
 
 Examples:
-  handheld login                       # browser device-code flow, stores the key in ~/.handheld/config.json
+  handheld login                       # browser device-code flow, stores a local key in ~/.handheld/config.json
   handheld login --no-open             # headless/SSH: print the URL + code to open elsewhere
   handheld login --manual              # paste an existing API key + URL instead
 
 Caveats:
   - Browser flow polls until you approve; it times out (~10m) or errors if the code expires — just re-run.
-  - CI/agents can skip this entirely: set HANDHELD_API_KEY (or \`handheld config set api-key ...\`) and the cloud commands work headlessly.
+  - CI/agents can skip this entirely: set HANDHELD_API_KEY and the cloud commands work headlessly without writing a key to config.
   - Not needed for \`handheld connect --local\` — local adb devices require no key.`
     )
     .action(
@@ -515,12 +530,13 @@ Arg grammar:
 
 Examples:
   handheld init                              # browser sign-in, claim a trial phone, connect it
-  HANDHELD_API_KEY=hk_... handheld init      # CI/agent path: no browser, provisions directly with the key
+  HANDHELD_API_KEY=hk_... handheld init      # agent/CI path: no browser, no stored key
   handheld init --with-adb                   # also bring up the ADB transport, not just relay
   handheld init --no-device                  # just sign in and store the key
 
 Caveats:
-  - With a key already present (HANDHELD_API_KEY env or saved config) it skips the browser entirely — the headless path.
+  - With HANDHELD_API_KEY present it skips the browser entirely and does not copy the key into config.json.
+  - Saved config keys still work for backward compatibility and local convenience.
   - Without a key it opens a browser device-code flow; use --no-open on a headless host.
   - Claims a TRIAL cloud phone and sets it as default-device, so later bare \`connect\`/\`run\` target it.
   - For a LOCAL adb device you don't need init at all — just \`handheld connect --local\`.`
@@ -540,10 +556,10 @@ Caveats:
           // interactive browser sign-in and provision directly with it. This is
           // the headless / CI / agent path: `HANDHELD_API_KEY=… handheld init`
           // just creates a device, no CLI auth required.
-          const existingKey = configuredApiKey();
-          const login = existingKey
+          const existingAuth = configuredApiAuth();
+          const login = existingAuth
             ? {
-                apiKey: existingKey,
+                apiKey: existingAuth.apiKey,
                 apiUrl: resolveLoginApiUrl(opts.apiUrl),
                 deviceCode: "",
               }
@@ -553,13 +569,16 @@ Caveats:
                 json,
                 open: opts.open,
               });
-          if (existingKey) {
-            // Persist the resolved key/url so later commands reuse them, and
-            // mirror what the device-code path prints on success.
-            setConfig({ apiKey: login.apiKey, apiUrl: login.apiUrl });
+          if (existingAuth) {
+            // Env-sourced auth is intentionally transient. Saved config remains
+            // supported for legacy/local use, but env secrets do not get copied
+            // into config.json.
+            if (existingAuth.source === "config") {
+              setConfig({ apiKey: login.apiKey, apiUrl: login.apiUrl });
+            }
             if (!json) {
               console.log(
-                `Using configured API key (${login.apiKey.slice(0, 8)}…) — skipping browser sign-in.`
+                `Using ${existingAuth.source === "env" ? "env API key" : "configured API key"} (${login.apiKey.slice(0, 8)}…) — skipping browser sign-in.`
               );
             }
           }
@@ -649,7 +668,7 @@ Caveats:
           }
         } catch (err) {
           console.error("Init failed:", (err as Error).message);
-          console.error("Hint: check auth (`handheld login` or HANDHELD_API_KEY) and balance (`handheld billing`); retry — trial pool hardware can be momentarily unavailable.");
+          console.error("Hint: check auth (prefer HANDHELD_API_KEY, or use `handheld login`) and balance (`handheld billing`); retry — trial pool hardware can be momentarily unavailable.");
           process.exit(1);
         }
       }
@@ -657,7 +676,7 @@ Caveats:
 
   program
     .command("create")
-    .description("claim + start a new trial cloud phone with the configured API key (no browser sign-in)")
+    .description("claim + start a new trial cloud phone with an available API key (no browser sign-in)")
     .option(
       "--api-url <url>",
       `API URL (overrides HANDHELD_API_URL env and config; default ${DEFAULT_API_URL})`
@@ -677,7 +696,7 @@ Examples:
   handheld create --no-connect                 # provision only; connect later with \`handheld connect <id>\`
 
 Caveats:
-  - Needs an API key already configured (HANDHELD_API_KEY or \`handheld login\`); unlike \`init\` it never opens a browser.
+  - Needs an API key already available (prefer HANDHELD_API_KEY, or use \`handheld login\`); unlike \`init\` it never opens a browser.
   - \`init\` is the interactive sibling (it can sign you in first); \`create\` is the headless provisioner.
   - Sets the new phone as default-device and connects relay by default (--with-adb adds the ADB transport).`
     )
@@ -753,7 +772,7 @@ Caveats:
           console.log("Ready: handheld tap, handheld swipe, handheld snap, and handheld shell can use this device.");
         } catch (err) {
           console.error("Create failed:", (err as Error).message);
-          console.error("Hint: confirm an API key is set (`handheld config get api-key` or HANDHELD_API_KEY) and you have balance (`handheld billing`); retry if pool hardware was busy.");
+          console.error("Hint: confirm HANDHELD_API_KEY is set, or a local login key exists, and you have balance (`handheld billing`); retry if pool hardware was busy.");
           process.exit(1);
         }
       }

@@ -417,10 +417,18 @@ async function settleAfterSuccess<T extends TransportResult>(
 }
 
 async function ensureTinyState(connection: Connection): Promise<TinyState> {
-  if (connection.tiny) return connection.tiny;
+  if (connection.tiny) {
+    try {
+      if (tinySupportsRequiredAgentShape(await getTinyStatus(connection.tiny))) {
+        return connection.tiny;
+      }
+    } catch {
+      // Fall through to bootstrap/reinstall when ADB is available.
+    }
+  }
   const serial = connection.adb?.serial;
   if (!serial) {
-    console.error("Snapshot requires the Tiny helper or ADB, and neither is available.");
+    console.error("Snapshot requires a current Tiny helper or ADB, and neither is available.");
     console.error(
       "Hint: reconnect with ADB enabled (`handheld connect --local`), or bootstrap the on-device helper with `handheld tiny bootstrap`. See `handheld guide troubleshooting`."
     );
@@ -457,22 +465,16 @@ async function liveForegroundSignature(input: {
   relay: Transport | null;
 }): Promise<SnapshotForegroundSignature> {
   let signature: SnapshotForegroundSignature;
-  if (input.connection.tiny) {
-    signature = tinySignatureFromRaw(
-      await getTinySignature(input.connection.tiny, {
-        previousEventSeq: input.previousEventSeq,
-      }) as Record<string, unknown>
-    );
-    return await completeLiveForegroundSignature(signature, input.relay, input.adb);
-  }
-
-  const serial = input.connection.adb?.serial;
-  if (serial) {
-    const tiny = await ensureTinyState(input.connection);
-    signature = tinySignatureFromRaw(
-      await getTinySignature(tiny, { previousEventSeq: input.previousEventSeq }) as Record<string, unknown>
-    );
-    return await completeLiveForegroundSignature(signature, input.relay, input.adb);
+  if (input.connection.tiny || input.connection.adb?.serial) {
+    try {
+      const tiny = await ensureTinyState(input.connection);
+      signature = tinySignatureFromRaw(
+        await getTinySignature(tiny, { previousEventSeq: input.previousEventSeq }) as Record<string, unknown>
+      );
+      return await completeLiveForegroundSignature(signature, input.relay, input.adb);
+    } catch (error) {
+      if (!input.relay && !input.adb) throw error;
+    }
   }
 
   const tokenState = await ensureDeviceTiny({
@@ -1347,7 +1349,7 @@ async function ensureDeviceTiny(input: {
   force?: boolean;
   onProgress?: (message: string) => void;
   relay: Transport | null;
-}): Promise<{ token: string; tokenFile: string }> {
+}): Promise<{ token: string }> {
   const tokenState = ensureTinyToken();
   if (input.force) {
     // Force a clean reinstall: uninstall first (so the bundled APK definitely
@@ -2553,7 +2555,7 @@ Caveats:
     before the action you want to detect.`
     )
     .action(async (condition: string, value: string | undefined, opts) => {
-      const { connection, deviceId } = await getTransport(program);
+      const { adb, connection, deviceId, relay } = await getTransport(program);
       const normalized = condition.toLowerCase();
       if (!["stable", "text", "ref", "change"].includes(normalized)) {
         console.error(`Unknown wait-for condition "${condition}".`);
@@ -2572,8 +2574,26 @@ Caveats:
       const timeoutMs = Math.max(0, Number(opts.timeout));
       const startedAt = Date.now();
       if (normalized === "stable") {
-        const tiny = await ensureTinyState(connection);
-        const result = await waitTinyStable(tiny, { timeoutMs });
+        let result: Record<string, unknown>;
+        try {
+          const tiny = await ensureTinyState(connection);
+          result = await waitTinyStable(tiny, { timeoutMs });
+        } catch (error) {
+          if (!relay && !adb) throw error;
+          const tokenState = await ensureDeviceTiny({
+            adb,
+            api: () => new HandheldApiClient(),
+            connection,
+            relay,
+          });
+          result = await readTinyJsonFromDevice({
+            adb,
+            maxTimeSec: Math.ceil(timeoutMs / 1000) + 6,
+            path: tinyWaitForStablePath({ timeoutMs }),
+            relay,
+            token: tokenState.token,
+          });
+        }
         // Honor Tiny's own verdict: `stable:false` means it sampled until the
         // device timeout without the UI ever going quiet. Reporting ok:true
         // there would mask a real timeout (mirrors the text/ref/change branch).
@@ -3133,7 +3153,6 @@ Caveats:
           console.log(JSON.stringify({
             ok: true,
             port: TINY_DEVICE_PORT,
-            tokenFile: tiny.tokenFile,
           }));
         } else {
           console.log("Tiny ready");
@@ -3212,7 +3231,7 @@ just use \`handheld tiny bootstrap\` to install + start together.`
           token: tiny.token,
         });
         if (program.opts().json) {
-          console.log(JSON.stringify({ ok: true, status, tokenFile: tiny.tokenFile }));
+          console.log(JSON.stringify({ ok: true, status }));
         } else {
           console.log("Tiny ready");
         }

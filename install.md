@@ -39,12 +39,13 @@ phone unprompted (it uses trial quota / billing).
 The product's onboarding. Claims a trial cloud phone and connects transports.
 **How it authenticates depends on whether a key is already available:**
 
-- **You're an agent / headless / CI, and you HAVE a key** — set it first; `init`
-  then skips the browser entirely and provisions directly. No human, no browser:
+- **You're an agent / headless / CI, and you HAVE a key** — set it in the
+  environment; `init` then skips the browser entirely and provisions directly.
+  No human, no browser, no stored local key:
 
   ```bash
-  export HANDHELD_API_KEY=<key>     # or: handheld config set api-key <key>
-  handheld init                     # "Using configured API key — skipping browser sign-in." → device ready
+  export HANDHELD_API_KEY=<key>
+  handheld init                     # "Using env API key — skipping browser sign-in." → device ready
   ```
 
 - **No key yet (interactive human at a terminal)** — `init` opens a browser login
@@ -139,9 +140,9 @@ login, plugging in a device, authorizing USB debugging).
 1. Already connected? `handheld snap -i` prints a snapshot → you're done.
 2. Otherwise `handheld status`. If "No active connections", connect (cloud or local above).
 3. Match the symptom:
-   - **"No API key configured. Run `handheld init`"** → only happens on a Gateway path. For
-     a cloud phone run `handheld init` (or `handheld login`). For a *local* device you don't
-     need a key — use `handheld connect --local`.
+   - **"No API key configured"** → only happens on a Gateway path. For a cloud
+     phone set `HANDHELD_API_KEY` (preferred) or run `handheld login`. For a
+     *local* device you don't need a key — use `handheld connect --local`.
    - **"Not connected. Run `handheld connect`"** → no saved connection; connect first.
    - **`connect --local` → "No adb device in 'device' state"** → start an emulator or plug in
      a device and authorize USB debugging (`adb devices` should list it as `device`).

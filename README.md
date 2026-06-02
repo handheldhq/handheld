@@ -19,24 +19,24 @@ npm install -g handheld
 npx handheld i
 ```
 
-`handheld i` opens a browser login, stores the issued API key in
-`~/.handheld/config.json`, starts a trial cloud phone when available, connects relay
-and ADB transports, starts the bundled Tiny helper when a device command path is available, and
-redirects the approval tab to that phone's live device view.
+`handheld i` opens a browser login when no API key is already available, starts a
+trial cloud phone when available, connects relay and ADB transports, starts the
+bundled Tiny helper when a device command path is available, and redirects the
+approval tab to that phone's live device view.
 
-**Already have a key? `init` runs headlessly — no browser.** When an API key is
-already available (the `HANDHELD_API_KEY` env var, or a prior
-`handheld config set api-key`), `handheld init` skips the browser sign-in and
-provisions the trial phone directly with that key. This is the CI / agent path:
+**Already have a key? `init` runs headlessly — no browser and no stored key.**
+When `HANDHELD_API_KEY` is present, `handheld init` skips the browser sign-in
+and provisions the trial phone directly with that key. This is the CI / agent
+path:
 
 ```bash
 export HANDHELD_API_KEY=<your-api-key>
 handheld init                 # creates + connects a device, no CLI auth prompt
-# or set it once in config instead of the env var:
-handheld config set api-key <your-api-key>
-handheld config set api-url <your-api-url>
-handheld init
 ```
+
+Saved config keys from `handheld login` or `handheld config set api-key` still
+work for backward compatibility, but agents should prefer the env var so secrets
+do not need to be written to disk.
 
 ## Profiles And Sessions
 
@@ -316,18 +316,21 @@ ADB/Tiny bootstrap path as the CLI.
 
 ## Config
 
-Stored in `~/.handheld/config.json`. Available keys:
+Stored in `~/.handheld/config.json`. Headless/agent auth should usually use
+`HANDHELD_API_KEY` for the current process; browser login and manual config
+remain supported for local profiles. Available keys:
 
 | Key | Description |
 |-----|-------------|
-| `api-key` | API authentication key |
+| `api-key` | Optional stored API key; prefer `HANDHELD_API_KEY` for agents/CI |
 | `api-url` | Gateway API base URL |
 | `default-device` | Default profile/session alias for commands |
 | `output` | Default output format (`table`, `json`, `quiet`) |
 
 `handheld config get api-key`, `handheld config get`, and `handheld doctor`
-mask stored API keys by default. Use environment variables only for the current
-process when a full key must be supplied non-interactively.
+mask stored API keys by default. Use `HANDHELD_API_KEY` when a full key must be
+supplied non-interactively; `handheld config get api-key --raw` exists only for
+automation that intentionally uses a stored local key.
 
 ## Requirements
 
