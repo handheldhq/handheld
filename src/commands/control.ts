@@ -1811,86 +1811,100 @@ export function registerControlCommands(program: Command): void {
       });
   }
 
+  // Capture a screenshot. JPEG via Tiny (~5-10x smaller than PNG -> faster, esp.
+  // over relay) is the default; if Tiny isn't reachable, fall back to the PNG
+  // runtime/screencap path so a capture still succeeds. format "png" forces PNG.
+  async function captureScreenshot(
+    ctx: { adb: AdbTransport | null; connection: Connection; relay: Transport | null },
+    shotOpts: { format?: string; quality?: number }
+  ): Promise<
+    | { base64: string; buffer: Buffer; ext: "jpg" | "png"; mimeType: string; ok: true }
+    | { error: string; ok: false }
+  > {
+    const { adb, connection, relay } = ctx;
+    const wantsJpeg = !shotOpts.format || /^jpe?g$/i.test(String(shotOpts.format));
+    const quality = shotOpts.quality ?? 80;
+    if (wantsJpeg) {
+      try {
+        let res: Record<string, unknown> | undefined;
+        if (connection.tiny) {
+          res = await tinyScreenshot(connection.tiny, { format: "jpg", quality });
+        } else if (relay || adb) {
+          const token = ensureTinyToken().token;
+          res = await readTinyJsonFromDevice({
+            adb,
+            maxTimeSec: 20,
+            path: `/screenshot?format=jpg&quality=${quality}&chunked=1&maxChars=32768`,
+            relay,
+            token,
+          });
+        }
+        if (res && typeof res.data === "string") {
+          return {
+            base64: res.data,
+            buffer: Buffer.from(res.data, "base64"),
+            ext: "jpg",
+            mimeType: "image/jpeg",
+            ok: true,
+          };
+        }
+      } catch {
+        // Tiny unavailable -> fall through to the PNG runtime/screencap path.
+      }
+    }
+    const result = await runWithAdbFallback("screenshot", relay, adb, (transport) =>
+      transport.screenshot()
+    );
+    if (!result.ok || !result.buffer) {
+      return {
+        error: "error" in result && result.error ? String(result.error) : "Screenshot failed",
+        ok: false,
+      };
+    }
+    return {
+      base64: result.base64 ?? result.buffer.toString("base64"),
+      buffer: result.buffer,
+      ext: "png",
+      mimeType: "image/png",
+      ok: true,
+    };
+  }
+
   program
-    .command("screenshot", { hidden: true })
-    .description("capture screenshot")
+    .command("screenshot")
+    .description("capture a screenshot (JPEG by default; falls back to PNG)")
     .option("--output <file>", "save to file")
     .option("--base64", "output raw base64 to stdout")
-    .option("--format <fmt>", "image format: png (default) or jpg", "png")
+    .option("--format <fmt>", "image format: jpg (default) or png", "jpg")
     .option("--quality <n>", "jpeg quality 1-100", parseIntOption, 80)
     .action(async (opts) => {
-      const { relay, adb, connection } = getTransport(program);
+      const ctx = getTransport(program);
       try {
-        const jpeg = /^jpe?g$/i.test(String(opts.format ?? "png"));
-        let buffer: Buffer | undefined;
-        let base64: string | undefined;
-
-        if (jpeg) {
-          // screencap (-p) and the provider path only do PNG; Tiny encodes JPEG
-          // (~5-10x smaller -> faster, esp. over relay). Route through Tiny:
-          // direct HTTP when connected, else the relay/adb device-shell
-          // (/screenshot chunks, so the base64 reassembles).
-          let res: Record<string, unknown> | undefined;
-          try {
-            if (connection.tiny) {
-              res = await tinyScreenshot(connection.tiny, { format: "jpg", quality: opts.quality });
-            } else if (relay || adb) {
-              const token = ensureTinyToken().token;
-              res = await readTinyJsonFromDevice({
-                adb,
-                maxTimeSec: 20,
-                path: `/screenshot?format=jpg&quality=${opts.quality}&chunked=1&maxChars=32768`,
-                relay,
-                token,
-              });
-            }
-          } catch {
-            res = undefined;
-          }
-          if (res && typeof res.data === "string") {
-            base64 = res.data;
-            buffer = Buffer.from(base64, "base64");
-          }
-          if (!buffer) {
-            outputResult(
-              program,
-              { ok: false, error: "JPEG capture requires Tiny — run `handheld tiny bootstrap` first." },
-              "Screenshot failed"
-            );
-            return;
-          }
-        } else {
-          const result = await runWithAdbFallback(
-            "screenshot",
-            relay,
-            adb,
-            (transport) => transport.screenshot()
-          );
-          if (!result.ok) {
-            outputResult(program, result, "Screenshot failed");
-            return;
-          }
-          buffer = result.buffer;
-          base64 = result.base64;
+        const shot = await captureScreenshot(ctx, {
+          format: opts.format,
+          quality: opts.quality,
+        });
+        if (!shot.ok) {
+          outputResult(program, { error: shot.error, ok: false }, "Screenshot failed");
+          return;
         }
-
-        const ext = jpeg ? "jpg" : "png";
-        if (opts.output && buffer) {
+        const { base64, buffer, ext } = shot;
+        if (opts.output) {
           writeFileSync(opts.output, buffer);
           if (!program.opts().json) console.log(`Saved to ${opts.output}`);
         } else if (opts.base64 || program.opts().json) {
           if (program.opts().json) {
-            console.log(JSON.stringify({ ok: true, base64 }));
+            console.log(JSON.stringify({ base64, ok: true }));
           } else {
-            process.stdout.write(base64 ?? "");
+            process.stdout.write(base64);
           }
         } else {
           const name = `handheld-screenshot-${Date.now()}.${ext}`;
-          if (buffer) writeFileSync(name, buffer);
+          writeFileSync(name, buffer);
           console.log(`Saved to ${name}`);
         }
       } finally {
-        await disconnectRelay(relay);
+        await disconnectRelay(ctx.relay);
       }
     });
 
@@ -1903,7 +1917,7 @@ export function registerControlCommands(program: Command): void {
     .option("--raw", "print raw Tiny snapshot JSON")
     .option("--screenshot", "include a screenshot with the snapshot")
     .option("--screenshot-base64", "include screenshot base64 in non-JSON output")
-    .option("--screenshot-output <file>", "save screenshot PNG to file")
+    .option("--screenshot-output <file>", "save screenshot to file")
     .action(async (opts) => {
       const { connection, deviceId, relay, adb } = getTransport(program);
       try {
@@ -1926,9 +1940,7 @@ export function registerControlCommands(program: Command): void {
         const wantsScreenshot =
           opts.screenshot || opts.screenshotBase64 || opts.screenshotOutput;
         const screenshot = wantsScreenshot
-          ? await runWithAdbFallback("screenshot", relay, adb, (transport) =>
-              transport.screenshot()
-            )
+          ? await captureScreenshot({ adb, connection, relay }, { format: "jpg" })
           : null;
 
         if (opts.raw) {
@@ -1946,11 +1958,11 @@ export function registerControlCommands(program: Command): void {
             screenshot: screenshot?.ok
               ? {
                   base64: screenshot.base64,
-                  mimeType: "image/png",
+                  mimeType: screenshot.mimeType,
               }
             : screenshot
               ? {
-                  error: "error" in screenshot ? screenshot.error : "Screenshot failed",
+                  error: screenshot.error,
                   ok: false,
                 }
               : undefined,
@@ -1964,18 +1976,16 @@ export function registerControlCommands(program: Command): void {
           interactive: opts.interactive,
         }));
         if (screenshot) {
-          if (!screenshot.ok || !screenshot.buffer) {
-            console.error(
-              "Screenshot failed:",
-              "error" in screenshot ? screenshot.error : "unknown error"
-            );
+          if (!screenshot.ok) {
+            console.error("Screenshot failed:", screenshot.error);
             process.exitCode = 1;
             return;
           }
           if (opts.screenshotBase64) {
-            console.log(`Screenshot base64: ${screenshot.base64 ?? ""}`);
+            console.log(`Screenshot base64: ${screenshot.base64}`);
           } else {
-            const name = opts.screenshotOutput ?? `handheld-screenshot-${Date.now()}.png`;
+            const name =
+              opts.screenshotOutput ?? `handheld-screenshot-${Date.now()}.${screenshot.ext}`;
             writeFileSync(name, screenshot.buffer);
             console.log(`Screenshot: ${name}`);
           }
