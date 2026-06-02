@@ -106,6 +106,52 @@ handheld recent                         # Android recent apps
 handheld shell "pm list packages"       # run shell command
 ```
 
+### Snapshot format
+
+`snap` prints a compact, agent-facing tree: structural containers are collapsed,
+off-screen nodes are dropped (with a scroll hint), and only the foreground
+window's nodes appear inline — other windows (status bar, nav bar, keyboard) are
+grouped or summarized below. Use `--all` for the full uncollapsed tree,
+`--offscreen` to keep below-the-fold nodes, and `--raw`/`--json` for the complete
+structured node list (every field, never culled).
+
+```
+Snapshot com.android.settings [com.android.settings.homepage.SettingsHomepageActivity] (18/116 nodes, backend=tiny)
+- @e18 Button "Search Settings" [id=search_action_bar actions=[press]]
+- @e21 ScrollView [id=main_content_scrollable_container actions=[scroll]]
+  - @e33 Button "Network & internet" subtitle="Mobile, Wi‑Fi, hotspot" [actions=[press]]
+  - @e67 Button "Storage" subtitle="45% used - 4.38 GB free" [actions=[press]]
+  [22 more below — scroll: "Battery", "100%", "System", …]
+▶ @e149 TextField "wifi" [id=open_search_view_edit_text focused actions=[press,long_press,set_value]]
+- Text "No results for wifi"
+[keyboard open · com.google.android.inputmethod.latin (~40 keys) — use `type`; --all to show keys]
+```
+
+Line grammar:
+
+    {indent}{bullet} @eN Role "title" subtitle="…" = "value" [id=… focused disabled checked actions=[…]]
+
+- **bullet** — `-`, or **`▶`** when the node is focused (also flagged `focused`).
+- **`@eN`** — actionable ref, cached to disk between invocations (pass it to
+  `tap`/`type`/…). Read-only text renders **without** a ref (`- Text "…"`):
+  visible to read, not a target.
+- **Role** — TitleCase role: `Button`, `TextField`, `Text`, `ScrollView`,
+  `List`, `CheckBox`, `Switch`, `Image`, `Group`, …
+- **`"title"`** — the element's name: its own contentDescription, else a tappable
+  row's `…:id/title` child (else the first child text).
+- **`subtitle="…"`** — the secondary line, from a `…:id/summary` child (else the
+  second child text). Only on tappable rows.
+- **`= "value"`** — the node's current text (e.g. an editable field's contents).
+- **`[ … ]`** — `id=` (resource-id, package prefix stripped), state flags
+  (`focused`, `disabled`, `checked`/`unchecked`, `selected`), and **`actions=[…]`**
+  = what you can do here: `press`, `long_press`, `set_value`, `toggle`, `scroll`.
+- **`[other window · pkg]`** — nodes belonging to a different window than the
+  foreground activity. **`[keyboard open · …]`** — the IME, collapsed to one line
+  (the keys are rarely tap targets — use `type`; pass `--all` to expand them).
+
+Refs are invalidated by anything that changes the screen — re-`snap` after a
+tap, scroll, navigation, or async update before using refs again.
+
 Compatibility commands remain available for existing scripts:
 
 ```bash
