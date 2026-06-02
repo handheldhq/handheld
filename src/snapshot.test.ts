@@ -116,6 +116,18 @@ describe("Tiny snapshot formatting", () => {
     expect(
       compareForegroundSignatures({
         cached: snapshot.foregroundSignature,
+        live: {
+          component: "com.android.settings/com.android.settings.SubSettings",
+          layoutDigest: "layout-1",
+        },
+      })
+    ).toMatchObject({
+      ok: false,
+      reason: "foreground changed from com.android.settings/com.android.settings.Settings to com.android.settings/com.android.settings.SubSettings",
+    });
+    expect(
+      compareForegroundSignatures({
+        cached: snapshot.foregroundSignature,
         live: { layoutDigest: "layout-1" },
       })
     ).toMatchObject({ ok: false, reason: "missing live foreground signature" });

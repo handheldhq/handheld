@@ -13,7 +13,7 @@ import {
   resolveConnection,
   type ConnectionHealth,
 } from "../connection-health.js";
-import { maskApiKey } from "../redact.js";
+import { maskApiKey, maskUrl } from "../redact.js";
 import { probePort } from "../transport/adb/tunnel.js";
 import { RelayClient } from "../transport/relay/client.js";
 import { requestRelayDaemon } from "../transport/relay/daemon.js";
@@ -36,6 +36,14 @@ interface ConnectionStatus {
 
 interface InternalConnectionStatus extends ConnectionStatus {
   relayProbeFailed: boolean;
+}
+
+function relayStateForDisplay(relay: ReturnType<typeof getRelayState>): ReturnType<typeof getRelayState> {
+  return {
+    ...relay,
+    relayUrl: relay.relayUrl ? maskUrl(relay.relayUrl) : "",
+    viewerUrl: relay.viewerUrl ? maskUrl(relay.viewerUrl) : undefined,
+  };
 }
 
 export function configForDisplay(config: HandheldConfig): HandheldConfig {
@@ -111,7 +119,7 @@ async function statusForConnection(
     health,
     relay: {
       relayStatus,
-      url: relayState.relayUrl,
+      url: relayState.relayUrl ? maskUrl(relayState.relayUrl) : "",
     },
     relayProbeFailed,
     sessionId: conn.sessionId,
@@ -262,7 +270,7 @@ export function registerStatusCommand(program: Command): void {
         deviceId: connection.deviceId,
         health: inspectConnectionHealth(connection),
         local: Boolean(connection.local),
-        relay: getRelayState(connection),
+        relay: relayStateForDisplay(getRelayState(connection)),
         sessionId: connection.sessionId,
         tiny: connection.tiny ?? null,
       }));

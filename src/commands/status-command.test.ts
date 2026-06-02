@@ -181,8 +181,9 @@ describe("status and doctor commands", () => {
         deviceId: "stale-relay",
         relay: {
           connected: true,
-          relayUrl: "wss://relay.test",
+          relayUrl: "wss://relay.test/live-secret-token",
           socketPath: join(home, "missing.sock"),
+          viewerUrl: "https://viewer.test/live-secret-token",
         },
       })
     );
@@ -191,7 +192,12 @@ describe("status and doctor commands", () => {
     const report = JSON.parse(output);
 
     expect(output).not.toContain(fullKey);
+    expect(output).not.toContain("live-secret-token");
     expect(report.config.apiKey).toBe("muk_secr...");
+    expect(report.connections[0].relay).toMatchObject({
+      relayUrl: "wss://relay.test/...",
+      viewerUrl: "https://viewer.test/...",
+    });
     expect(report.target).toMatchObject({
       ok: false,
       targetDeviceId: "stale-relay",

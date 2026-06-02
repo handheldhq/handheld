@@ -54,6 +54,14 @@ function deviceInjectionConfirmed(error: unknown): boolean {
   return record.injected === true || record.deviceInjected === true || record.reachedDevice === true;
 }
 
+function sentButUnsettled(): ServerSettleResult {
+  return {
+    ok: true,
+    settleInconclusive: true,
+    wait: { backend: "tiny", ok: false, reason: "settle-timeout", stable: false, waitedMs: 0 },
+  };
+}
+
 /**
  * Try Tiny's server-side input-with-settle (/v2/input with settle:true): Tiny
  * injects the gesture AND settles on the filter-independent layoutDigest in one
@@ -89,17 +97,13 @@ export async function tryServerSettle(
     // Old helper (no /input route) or never reached the device — the gesture did
     // not execute, so the client path is a safe first attempt.
     if (/HTTP 404|not found/i.test(msg) || failedBeforeReachingDevice(msg)) return null;
-    // Ambiguous timeouts/aborts are not enough proof that input fired. Only a
-    // sender that explicitly marks the inject acknowledgement may report
-    // sent-but-unsettled; otherwise fall back to the safe client path.
+    // Ambiguous direct-Tiny timeouts happen after we have handed a POST to the
+    // local forwarded port; retrying can double-fire the gesture. Custom senders
+    // only get the same treatment when they explicitly mark injection.
     const name = (err as { name?: string }).name;
     if (name === "AbortError" || name === "TimeoutError" || /\babort|timed?\s?out|timeout/i.test(msg)) {
-      if (!deviceInjectionConfirmed(err)) return null;
-      return {
-        ok: true,
-        settleInconclusive: true,
-        wait: { backend: "tiny", ok: false, reason: "settle-timeout", stable: false, waitedMs: 0 },
-      };
+      if (send && !deviceInjectionConfirmed(err)) return null;
+      return sentButUnsettled();
     }
     // A genuinely unexpected error (gesture state unknown): surface it honestly.
     return { ok: false, error: msg };

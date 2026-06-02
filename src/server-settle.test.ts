@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { tryServerSettle } from "./server-settle.js";
 import type { Connection } from "./state.js";
 import type { TinyInputOptions } from "./tiny-helper.js";
 
 const conn = { deviceId: "d" } as unknown as Connection;
 const gesture = { type: "tap", x: 1, y: 1 } as unknown as TinyInputOptions;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("tryServerSettle — sent-but-unsettled handling (H3)", () => {
   it("does not report an unacknowledged abort/timeout as settleInconclusive", async () => {
@@ -27,6 +31,31 @@ describe("tryServerSettle — sent-but-unsettled handling (H3)", () => {
     const res = await tryServerSettle(conn, gesture, { enabled: true }, abort);
     expect(res).not.toBeNull();
     expect(res!.ok).toBe(true); // NOT a failure — the gesture already fired
+    expect(res!.settleInconclusive).toBe(true);
+  });
+
+  it("treats a direct Tiny abort as sent-but-unsettled instead of retryable", async () => {
+    const err = new Error("This operation was aborted");
+    err.name = "AbortError";
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw err;
+    }));
+
+    const res = await tryServerSettle(
+      {
+        deviceId: "d",
+        tiny: {
+          baseUrl: "http://127.0.0.1:6792",
+          port: 6792,
+          status: "ready",
+        },
+      } as unknown as Connection,
+      gesture,
+      { enabled: true }
+    );
+
+    expect(res).not.toBeNull();
+    expect(res!.ok).toBe(true);
     expect(res!.settleInconclusive).toBe(true);
   });
 

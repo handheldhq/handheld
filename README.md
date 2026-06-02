@@ -64,9 +64,9 @@ handheld devices                        # list Gateway profiles/devices
 handheld connect <profile-id>           # start/reuse a session when transports exist
 handheld status                         # check connection health
 handheld status --prune                 # remove stale saved connection records
-handheld uninstall                      # preview removal of ~/.handheld + project .handheld/agent-space
 handheld doctor                         # secret-safe config/target/transport diagnostics
 handheld disconnect                     # tear down
+handheld uninstall                      # preview removal of ~/.handheld + project .handheld/agent-space
 ```
 
 Internally, device-named commands now use Gateway-native profiles and sessions.
@@ -87,7 +87,7 @@ CI on an emulator, or driving a physical device you've plugged in.
 handheld connect --local                 # auto-pick the one ready adb device
 handheld connect --local emulator-5554   # or name the serial (`adb devices`)
 handheld connect --local --no-tiny       # skip the Tiny helper bootstrap
-handheld snap -i                         # control commands work with no key
+handheld snap                            # control commands work with no key
 handheld tap @e7
 handheld disconnect                      # tears down locally; never calls the Gateway
 ```
@@ -210,12 +210,13 @@ handheld pull /sdcard/file.txt .        # pull file from device
 handheld install https://example.com/app.apk
 ```
 
-The compact snapshot (`snap -i`, the `snap` default, and the post-state
-snapshot) returns interactive nodes **plus** standalone readable text — headings,
+The compact snapshot (`snap` default and the post-state snapshot) returns
+interactive nodes **plus** standalone readable text — headings,
 descriptions, displayed values, error messages — so an agent can read a screen,
 not just act on it. Text already folded into an interactive row's label (the
 `·`-joined form) and labeled layout containers are omitted to avoid noise. Use
-`snap` (without `-i`) for the full, unfiltered node list.
+`snap -i`/`--interactive` for actionable nodes only, or `snap --all` for the
+full, unfiltered node list.
 
 Snapshots also carry the **foreground activity**: Tiny only reports the window's
 app (`appName`/`bundleId`, often "System UI"), so `snap`/`snap` fold in the

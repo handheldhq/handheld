@@ -87,7 +87,7 @@ Before dispatch, handheld verifies the cached snapshot still matches Tiny's live
 foreground/digest; stale cached targets fail closed with a re-snap hint.
 
 ```bash
-handheld snap -i                 # actionable refs (@e1…) + readable text; add --screenshot for a PNG
+handheld snap                    # compact refs (@e1…) + readable text; add --screenshot for a PNG
 handheld tap @e2                 # tap a cached ref (or `handheld tap 540 960` for coordinates)
 handheld type "hello"            # set the focused field (Tiny setText; --append to append)
 handheld open-app settings       # launch an app by name/alias/package
@@ -113,9 +113,9 @@ need no API key** — a key is only required for Gateway provisioning (`init`/`c
 
 ## Maintenance
 
-- `handheld uninstall` — dry-run local cleanup; add `--yes` to remove `~/.handheld`, project `.handheld/`, `agent-space/`, and legacy `agent-workspace/` for test resets.
 - `handheld status` — active connections + transport health; add `--prune` to remove stale records with no usable relay or ADB transport.
 - `handheld doctor` — read-only, secret-safe diagnostics for config, target selection, relay, ADB, Tiny, and stale-prune readiness.
+- `handheld uninstall` — dry-run local cleanup; add `--yes` to remove `~/.handheld`, project `.handheld/`, `agent-space/`, and legacy `agent-workspace/` for test resets.
 - `handheld disconnect [device-id]` — tear down. A bare `disconnect` resolves the sole
   connection; with several attached it requires an explicit serial. Local teardown never
   calls the Gateway.
@@ -143,7 +143,7 @@ Local:  adb device   <-- adb + on-device Tiny (localhost forward)     -->  handh
 Try a command first; only involve the user when a step genuinely needs them (browser
 login, plugging in a device, authorizing USB debugging).
 
-1. Already connected? `handheld snap -i` prints a snapshot → you're done.
+1. Already connected? `handheld snap` prints a compact snapshot → you're done.
 2. Otherwise `handheld status`. If "No active connections", connect (cloud or local above).
 3. Match the symptom:
    - **"No API key configured"** → only happens on a Gateway path. For a cloud
@@ -165,5 +165,5 @@ phone:
 ```bash
 handheld connect --local            # or `handheld init` for a cloud phone
 handheld open-app settings
-handheld snap -i                     # actionable refs + text for the Settings screen
+handheld snap                        # compact refs + text for the Settings screen
 ```
