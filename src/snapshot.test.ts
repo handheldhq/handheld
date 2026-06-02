@@ -76,16 +76,15 @@ describe("Tiny snapshot formatting", () => {
     });
 
     const text = formatSnapshot(snapshot, { header: false, interactive: true });
-    // Actionable node: ref + leaf id (package prefix stripped) + state flags, with
-    // the redundant "enabled" omitted.
+    // Actionable node: ref + TitleCase role + name + leaf id + actions. A focused
+    // node gets a "▶" bullet and an explicit `focused` attr.
     expect(text).toContain(
-      '@e2 [textinput] label="Search settings" preview="" id="search_action_bar" hittable focused editable'
+      '▶ @e2 TextField "Search settings" [id=search_action_bar focused actions=[press,set_value]]'
     );
-    // Read-only text renders ref-less (no "@eN") with a bare quoted value.
-    expect(text).toContain('[text] "Settings"');
-    expect(text).not.toContain('@e1 [text]');
-    // Compact mode keeps the 2 interactive nodes plus the standalone "Settings"
-    // text node (not already surfaced in an interactive label) = 3.
+    // Read-only text renders ref-less with a bare quoted value.
+    expect(text).toContain('- Text "Settings"');
+    expect(text).not.toContain('@e1');
+    // Compact mode keeps the 2 interactive nodes plus the standalone "Settings" text = 3.
     expect(snapshotNodesForDisplay(snapshot, { interactive: true })).toHaveLength(3);
   });
 
@@ -131,17 +130,19 @@ describe("Tiny snapshot formatting", () => {
       },
     });
 
-    const labels = snapshotNodesForDisplay(snapshot, { interactive: true }).map(
-      (node) => node.label
-    );
-    // Kept: the interactive row (absorbs "Storage · 233 kB used") + the heading.
-    expect(labels).toContain("Storage · 233 kB used");
-    expect(labels).toContain("Heads up message");
-    // Dropped: the two child text nodes (already in the row label) and the
-    // contentDescription-only FrameLayout.
-    expect(labels).not.toContain("Storage");
-    expect(labels).not.toContain("233 kB used");
-    expect(labels).not.toContain("Wifi signal full.");
+    const kept = snapshotNodesForDisplay(snapshot, { interactive: true });
+    // The hittable row resolves title + subtitle from its two child texts, which are
+    // then consumed (not rendered as their own lines).
+    const row = kept.find((node) => node.hittable)!;
+    expect(row.title).toBe("Storage");
+    expect(row.subtitle).toBe("233 kB used");
+    const text = kept.map((node) => node.label ?? node.value);
+    // The standalone heading survives; the consumed child texts and the
+    // contentDescription-only FrameLayout do not.
+    expect(text).toContain("Heads up message");
+    expect(kept.some((node) => !node.hittable && (node.label ?? node.value) === "Storage")).toBe(false);
+    expect(text).not.toContain("233 kB used");
+    expect(text).not.toContain("Wifi signal full.");
 
     // --all bypasses collapse and returns every node (structural included).
     expect(snapshotNodesForDisplay(snapshot, { all: true })).toHaveLength(5);
@@ -301,16 +302,14 @@ describe("Tiny snapshot formatting", () => {
     expect(snapshot.viewport).toEqual({ width: 1080, height: 2400 });
 
     const text = formatSnapshot(snapshot, { header: false });
-    expect(text).toContain('@e2 [button] label="On screen"');
+    expect(text).toContain('@e2 Button "On screen"');
     // The off-screen button isn't rendered as a node line, only summarized.
-    expect(text).not.toMatch(/@e3 \[button\]/);
+    expect(text).not.toMatch(/@e3\b/);
     expect(text).toContain("1 more below");
     expect(text).toContain('"Below fold"'); // appears only inside the scroll hint
 
     // --offscreen disables culling in the text view.
-    expect(formatSnapshot(snapshot, { header: false, offscreen: true })).toMatch(
-      /@e3 \[button\]/
-    );
+    expect(formatSnapshot(snapshot, { header: false, offscreen: true })).toMatch(/@e3\b/);
     // The structured node list never culls (both buttons survive collapse).
     expect(snapshotNodesForDisplay(snapshot, {})).toHaveLength(2);
   });
@@ -401,5 +400,47 @@ describe("Tiny snapshot formatting", () => {
     expect(dividerIdx).toBeGreaterThan(appIdx);
     expect(lines[dividerIdx]).toContain("com.android.systemui");
     expect(clockIdx).toBeGreaterThan(dividerIdx);
+  });
+
+  it("resolves title/subtitle from /title and /summary resource-ids, not position", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        nodes: [
+          { role: "android.widget.Button", hittable: true, depth: 0, bounds: { left: 0, top: 0, right: 1000, bottom: 100 } },
+          { role: "android.widget.ImageView", resourceId: "android:id/icon", depth: 1, bounds: { left: 0, top: 0, right: 80, bottom: 80 } },
+          // summary appears BEFORE title in tree order — id selection must still win.
+          { role: "android.widget.TextView", resourceId: "android:id/summary", text: "Mobile, Wi‑Fi, hotspot", depth: 1, bounds: { left: 90, top: 50, right: 900, bottom: 90 } },
+          { role: "android.widget.TextView", resourceId: "android:id/title", text: "Network & internet", depth: 1, bounds: { left: 90, top: 10, right: 900, bottom: 45 } },
+        ],
+      },
+    });
+    const row = snapshot.nodes[0]!;
+    expect(row.title).toBe("Network & internet");
+    expect(row.subtitle).toBe("Mobile, Wi‑Fi, hotspot");
+    expect(formatSnapshot(snapshot, { header: false })).toContain(
+      '@e1 Button "Network & internet" subtitle="Mobile, Wi‑Fi, hotspot" [actions=[press]]'
+    );
+  });
+
+  it("collapses an IME window to a one-line hint (expandable with --all)", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        component: "com.app/.Main",
+        nodes: [
+          { role: "android.widget.Button", text: "Submit", hittable: true, bundleId: "com.app", windowId: 1, parentIndex: -1, depth: 0, bounds: { left: 0, top: 0, right: 1080, bottom: 200 } },
+          { role: "android.widget.Button", text: "q", hittable: true, bundleId: "com.google.android.inputmethod.latin", windowId: 2, parentIndex: -1, depth: 0, bounds: { left: 0, top: 2000, right: 100, bottom: 2100 } },
+          { role: "android.widget.Button", text: "w", hittable: true, bundleId: "com.google.android.inputmethod.latin", windowId: 2, parentIndex: -1, depth: 0, bounds: { left: 100, top: 2000, right: 200, bottom: 2100 } },
+        ],
+      },
+    });
+    const text = formatSnapshot(snapshot, { header: false });
+    expect(text).toContain('"Submit"');
+    expect(text).toMatch(/keyboard open/);
+    expect(text).toContain("~2 keys");
+    expect(text).not.toContain('"q"'); // keys omitted by default
+    // --all expands the keyboard.
+    expect(formatSnapshot(snapshot, { header: false, all: true })).toContain('"q"');
   });
 });

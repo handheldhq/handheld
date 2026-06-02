@@ -38,6 +38,14 @@ export interface SnapshotNode {
   stableId?: string;
   sourceRole?: string;
   value?: string;
+  // Display name resolution (computed in normalize). `title` is the element's
+  // primary name (own contentDescription, or a hittable row's `…:id/title` child);
+  // `subtitle` is the secondary line (a `…:id/summary` child). `consumed` marks a
+  // text node whose content was folded into a parent's title/subtitle so it isn't
+  // also rendered as its own line.
+  title?: string;
+  subtitle?: string;
+  consumed?: boolean;
   // Indentation level (count of kept ancestors), pre-computed during display
   // selection when parentIndex linkage is present. The renderer falls back to a
   // depth-stack when it's absent (synthetic/legacy snapshots without parentIndex).
@@ -225,26 +233,7 @@ export function normalizeTinySnapshot(input: {
       },
     ];
   });
-  const labeledNodes = nodes.map((node, index) => {
-    // Absorb child text only onto genuine tap targets (hittable). Scroll/longpress
-    // containers stay bare so a row's label isn't echoed up its whole ancestor chain.
-    if (node.label || !node.hittable) return node;
-    const labels: string[] = [];
-    for (const child of nodes.slice(index + 1)) {
-      if (
-        node.depth !== undefined &&
-        child.depth !== undefined &&
-        child.depth <= node.depth
-      ) {
-        break;
-      }
-      if (!containsBounds(node.bounds, child.bounds)) continue;
-      const label = child.label ?? child.value;
-      if (label && !labels.includes(label)) labels.push(label);
-      if (labels.length >= 2) break;
-    }
-    return labels.length > 0 ? { ...node, label: labels.join(" · ") } : node;
-  });
+  resolveTitles(nodes);
 
   return {
     appName: firstString(raw, ["appName", "package"]),
@@ -260,11 +249,51 @@ export function normalizeTinySnapshot(input: {
     deviceId: input.deviceId,
     eventSeq: typeof raw.eventSeq === "number" ? raw.eventSeq : undefined,
     layoutDigest: firstString(raw, ["layoutDigest"]),
-    nodes: labeledNodes,
+    nodes,
     raw,
     treeDigest: firstString(raw, ["treeDigest"]),
-    viewport: deriveViewport(labeledNodes),
+    viewport: deriveViewport(nodes),
   };
+}
+
+// Resolve each actionable node's display name. An own contentDescription wins as
+// the title. A `hittable` row WITHOUT its own name borrows from descendant text:
+// the child whose resource-id ends `/title` (else the first text child) becomes the
+// title; the `/summary` child (else the next text child) becomes the subtitle. The
+// borrowed children are marked `consumed` so they don't also render as their own
+// lines. Non-hittable containers (scroll/list) stay nameless. This is how we tell
+// title vs subtitle apart on Android, which otherwise only exposes flat text.
+function resolveTitles(nodes: SnapshotNode[]): void {
+  for (let index = 0; index < nodes.length; index++) {
+    const node = nodes[index]!;
+    if (!isInteractiveNode(node)) continue;
+    if (node.label) {
+      node.title = node.label;
+      continue;
+    }
+    if (!node.hittable) continue;
+    const kids: SnapshotNode[] = [];
+    for (let j = index + 1; j < nodes.length; j++) {
+      const child = nodes[j]!;
+      if (node.depth !== undefined && child.depth !== undefined && child.depth <= node.depth) {
+        break;
+      }
+      if (!containsBounds(node.bounds, child.bounds)) continue;
+      if (!(child.value || child.role === "text")) continue;
+      if (child.label ?? child.value) kids.push(child);
+    }
+    if (kids.length === 0) continue;
+    const byTitle = kids.find((k) => /\/title$/.test(k.identifier ?? ""));
+    const bySummary = kids.find((k) => /\/summary$/.test(k.identifier ?? ""));
+    const titleNode = byTitle ?? kids[0]!;
+    const subNode = bySummary ?? kids.find((k) => k !== titleNode);
+    node.title = titleNode.label ?? titleNode.value;
+    titleNode.consumed = true;
+    if (subNode) {
+      node.subtitle = subNode.label ?? subNode.value;
+      subNode.consumed = true;
+    }
+  }
 }
 
 // The viewport = union of the shallowest-depth (root/decor) node bounds. Android
@@ -289,11 +318,12 @@ function deriveViewport(
   return width > 0 && height > 0 ? { width, height } : undefined;
 }
 
+// Actionable = the agent can DO something here. Deliberately excludes
+// focusable/focused: on Android focus is a side effect of tapping, not a discrete
+// action, so focus-only containers collapse away as structure.
 function isInteractiveNode(node: SnapshotNode): boolean {
   return (
     node.hittable ||
-    node.focusable ||
-    node.focused ||
     node.editable ||
     node.longPressable ||
     node.scrollable ||
@@ -317,45 +347,67 @@ function idLeaf(id: string): string {
   return id.replace(/^[^:\s]+:id\//, "");
 }
 
-function formatNode(node: SnapshotNode, opts: FormatSnapshotOptions): string {
-  // Read-only nodes (plain text/labels the agent can see but not act on) render
-  // ref-less: no "@eN" to spend, and the missing ref signals "not a target".
-  // Only actionable nodes carry a ref, resource-id, and state flags.
-  const interactive = isInteractiveNode(node);
-  const parts = [interactive ? `${node.ref} [${node.role}]` : `[${node.role}]`];
+// TitleCase display names for our normalized roles (CUA-style: `Button`, not `[button]`).
+const DISPLAY_ROLE: Record<string, string> = {
+  button: "Button", text: "Text", textinput: "TextField", image: "Image",
+  scrollview: "ScrollView", list: "List", checkbox: "CheckBox", switch: "Switch",
+  group: "Group", node: "Node",
+};
+function displayRole(role: string): string {
+  return DISPLAY_ROLE[role] ?? (role ? role[0]!.toUpperCase() + role.slice(1) : "Node");
+}
 
-  if (node.label) {
-    parts.push(interactive ? `label=${quote(truncate(node.label))}` : quote(truncate(node.label)));
-  }
-  if (interactive && node.editable && node.value !== undefined) {
-    parts.push(`preview=${quote(truncate(node.value))}`);
-  } else if (node.value && node.value !== node.label) {
-    parts.push(interactive ? `value=${quote(truncate(node.value))}` : quote(truncate(node.value)));
-  }
-  if (interactive && node.identifier) {
-    parts.push(`id=${quote(truncate(idLeaf(node.identifier), 120))}`);
-  }
+// Map our state flags to the concrete actions an agent can perform here.
+function nodeActions(node: SnapshotNode): string[] {
+  const actions: string[] = [];
+  if (node.hittable) actions.push("press");
+  if (node.longPressable) actions.push("long_press");
+  if (node.editable) actions.push("set_value");
+  if (node.checkable) actions.push("toggle");
+  if (node.scrollable) actions.push("scroll");
+  return actions;
+}
+
+// IME / soft-keyboard windows. Their keys are almost never ref-tap targets (you
+// `type` instead), so the renderer collapses them to a single hint line.
+function isImePackage(bundleId: string | undefined): boolean {
+  return /inputmethod|keyboard|\.ime\.|\bime\b/i.test(bundleId ?? "");
+}
+
+function formatNode(node: SnapshotNode, opts: FormatSnapshotOptions): string {
+  // Actionable nodes carry a ref, name, resource-id, and `actions=[…]`. Read-only
+  // text renders ref-less with a bare quoted string — visible to read, not a target.
+  const interactive = isInteractiveNode(node);
+  const parts: string[] = [];
+  if (interactive) parts.push(node.ref);
+  parts.push(displayRole(node.role));
 
   if (interactive) {
-    const flags: string[] = [];
-    // "enabled" is the common case and was on nearly every line — drop it, surface
-    // only the notable negative.
-    if (!node.enabled) flags.push("disabled");
-    if (node.hittable) flags.push("hittable");
-    if (node.focused) flags.push("focused");
-    if (node.editable) flags.push("editable");
-    if (node.selected) flags.push("selected");
-    if (node.checkable) flags.push("checkable");
-    if (node.checked) flags.push("checked");
-    if (node.scrollable) flags.push("scrollable");
-    if (node.longPressable) flags.push("longpress");
-    parts.push(...flags);
+    const title = node.title ?? node.label;
+    if (title) parts.push(quote(truncate(title)));
+    if (node.subtitle) parts.push(`subtitle=${quote(truncate(node.subtitle))}`);
+    // The node's own current text (an editable field's contents, a dynamic value).
+    if (node.value && node.value !== title) parts.push(`= ${quote(truncate(node.value))}`);
+  } else {
+    const text = node.label ?? node.value;
+    if (text) parts.push(quote(truncate(text)));
   }
 
+  const attrs: string[] = [];
+  if (interactive && node.identifier) attrs.push(`id=${truncate(idLeaf(node.identifier), 120)}`);
+  if (node.focused) attrs.push("focused");
+  if (interactive && !node.enabled) attrs.push("disabled");
+  if (node.checkable) attrs.push(node.checked ? "checked" : "unchecked");
+  if (interactive && node.selected) attrs.push("selected");
+  if (interactive) {
+    const actions = nodeActions(node);
+    if (actions.length) attrs.push(`actions=[${actions.join(",")}]`);
+  }
   if (opts.bounds && node.bounds) {
     const { left, top, right, bottom } = node.bounds;
-    parts.push(`bounds=${left},${top},${right},${bottom}`);
+    attrs.push(`bounds=${left},${top},${right},${bottom}`);
   }
+  if (attrs.length) parts.push(`[${attrs.join(" ")}]`);
 
   return parts.join(" ");
 }
@@ -372,11 +424,12 @@ function compactKeep(nodes: SnapshotNode[]): SnapshotNode[] {
   // node is dropped when its content already appears in a kept node's
   // (absorbed) label/value, so the "·"-joined row labels aren't duplicated.
   const seen = [...keep]
-    .flatMap((node) => [node.label, node.value])
+    .flatMap((node) => [node.title, node.subtitle, node.label, node.value])
     .filter(Boolean)
     .join(" ");
   for (const node of nodes) {
     if (keep.has(node)) continue;
+    if (node.consumed) continue;
     // "Own displayed text" = a non-empty `value` (the node's getText()), which
     // is role-agnostic so it catches TextView, TextClock, Chronometer, and
     // WebView text alike; `role === "text"` is a fallback for text widgets that
@@ -485,9 +538,12 @@ export function snapshotForOutput(
 // staircase; falls back to a depth-stack (turning absolute pre-order depths into
 // relative nesting) for snapshots without parentIndex.
 function renderGroup(groupNodes: SnapshotNode[], options: FormatSnapshotOptions): string[] {
+  // A focused node gets an obvious "▶" bullet (plus a `focused` attr); everything
+  // else a plain "-".
+  const bullet = (node: SnapshotNode): string => (node.focused ? "▶ " : "- ");
   if (groupNodes.some((node) => node.displayDepth !== undefined)) {
     return groupNodes.map(
-      (node) => "  ".repeat(node.displayDepth ?? 0) + formatNode(node, options)
+      (node) => "  ".repeat(node.displayDepth ?? 0) + bullet(node) + formatNode(node, options)
     );
   }
   const stack: number[] = [];
@@ -496,7 +552,7 @@ function renderGroup(groupNodes: SnapshotNode[], options: FormatSnapshotOptions)
     while (stack.length > 0 && stack[stack.length - 1]! >= depth) stack.pop();
     const indent = "  ".repeat(stack.length);
     stack.push(depth);
-    return indent + formatNode(node, options);
+    return indent + bullet(node) + formatNode(node, options);
   });
 }
 
@@ -578,6 +634,15 @@ export function formatSnapshot(
     for (const windowId of order) {
       const group = groups.get(windowId)!;
       const owner = group[0]?.bundleId ?? `window ${windowId}`;
+      // Soft keyboards are dozens of key buttons you never ref-tap (you `type`).
+      // Collapse to a one-line hint unless --all.
+      if (!options.all && isImePackage(owner)) {
+        const keys = group.filter((node) => node.hittable).length;
+        lines.push(
+          `[keyboard open · ${owner} (~${keys} keys) — use \`type\` to enter text; --all to show keys]`
+        );
+        continue;
+      }
       lines.push(`[other window · ${owner}]`);
       lines.push(...renderGroup(group, options));
     }
@@ -585,10 +650,14 @@ export function formatSnapshot(
 
   if (!options.header) return lines.join("\n");
 
-  const target = snapshot.appName ?? snapshot.bundleId ?? snapshot.deviceId;
-  // Show the foreground activity in the header when known — `appName`/`bundleId`
-  // is the window's app (often "System UI"), so the activity is the reliable
-  // "where am I".
+  // Foreground app package (from the resolved component) is the reliable "where
+  // am I" — `appName`/`bundleId` is the raw window owner, often "System UI".
+  const target =
+    snapshot.component?.split("/")[0] ??
+    snapshot.appName ??
+    snapshot.bundleId ??
+    snapshot.deviceId;
+  // Show the foreground activity in the header when known.
   const where = snapshot.activity ? `${target} [${snapshot.activity}]` : target;
   return [
     `Snapshot ${where} (${nodes.length}/${snapshot.nodes.length} nodes, backend=${snapshot.backend})`,
