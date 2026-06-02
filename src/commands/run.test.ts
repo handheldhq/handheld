@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -230,6 +231,87 @@ describe("handheld run workspace", () => {
     const prepared = JSON.parse(logs.join("\n"));
     expect(readFileSync(join(workspaceDir, "task.md"), "utf8")).toContain("Observe");
     expect(prepared.connected).toBeNull();
+  });
+
+  it("runs a non-dry local task with the connected serial in MCP and evidence capture", async () => {
+    vi.resetModules();
+    const workspaceDir = tempRoot();
+    const logs: string[] = [];
+    const spawnCalls: Array<{ args: string[]; command: string; cwd?: string }> = [];
+    const spawnSyncCalls: Array<{ args: string[]; command: string }> = [];
+    const connectLocalDevice = vi.fn(async () => ({
+      adb: { serial: "emulator-5554" },
+      deviceId: "emulator-5554",
+      relay: { connected: false },
+      tiny: null,
+    }));
+    vi.doMock("./connect.js", () => ({
+      connectDevice: vi.fn(),
+      connectLocalDevice,
+    }));
+    vi.doMock("node:child_process", () => ({
+      spawn: vi.fn((command: string, args: string[], options: { cwd?: string }) => {
+        spawnCalls.push({ args: [...args], command, cwd: options.cwd });
+        const child = new EventEmitter() as EventEmitter & {
+          stderr: EventEmitter;
+          stdin: { end: (value?: string) => void; on: () => void };
+          stdout: EventEmitter;
+        };
+        child.stdin = { end: () => undefined, on: () => undefined };
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }),
+      spawnSync: vi.fn((command: string, args: string[]) => {
+        spawnSyncCalls.push({ args: [...args], command });
+        return { signal: null, status: 0, stderr: "", stdout: "{\"ok\":true}\n" };
+      }),
+    }));
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      logs.push(String(value));
+    });
+
+    try {
+      const run = await import("./run.js");
+      await run.runLocalAgent(
+        "Observe",
+        {
+          agent: "codex",
+          codex: "codex-test",
+          local: true,
+          tinyWarmup: false,
+          workspace: workspaceDir,
+          workspaceTemplate: "harness",
+        },
+        { json: true },
+      );
+    } finally {
+      spy.mockRestore();
+      vi.doUnmock("./connect.js");
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+
+    const result = JSON.parse(logs.join("\n"));
+    const mcp = JSON.parse(readFileSync(join(workspaceDir, "mcp.json"), "utf8"));
+
+    expect(connectLocalDevice).toHaveBeenCalledWith({
+      json: true,
+      serial: undefined,
+      startTiny: false,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.deviceId).toBe("emulator-5554");
+    expect(result.evidenceCaptures).toHaveLength(2);
+    expect(result.evidenceCaptures.every((capture: { ok: boolean }) => capture.ok)).toBe(true);
+    expect(spawnSyncCalls).toHaveLength(2);
+    expect(spawnSyncCalls.every((call) => call.args.includes("emulator-5554"))).toBe(true);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]).toMatchObject({ command: "codex-test", cwd: workspaceDir });
+    expect(mcp.mcpServers.handheld.args).toContain("--device");
+    expect(mcp.mcpServers.handheld.args).toContain("emulator-5554");
+    expect(mcp.mcpServers.handheld.env.HANDHELD_EVIDENCE_DIR).toBe(join(workspaceDir, "evidence"));
   });
 
   it("rejects a local serial without local mode", async () => {
