@@ -11,6 +11,7 @@ import { registerRouteCommand } from "./commands/route.js";
 import { registerBillingCommand } from "./commands/billing.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerTeachCommand } from "./commands/teach.js";
+import { registerGuideCommand } from "./commands/guide.js";
 import { parseSettleMs } from "./action-wait.js";
 
 const program = new Command()
@@ -36,6 +37,12 @@ registerRouteCommand(program);
 registerBillingCommand(program);
 registerRunCommand(program);
 registerTeachCommand(program);
+registerGuideCommand(program);
+
+program.addHelpText(
+  "after",
+  "\nAgents: run `handheld guide` for the operating manual (loop, snapshot format, selectors, troubleshooting)."
+);
 
 program.option("--mcp", "run as MCP server (stdio)");
 
