@@ -63,6 +63,7 @@ export type RunWorkspaceInput = {
   cliCommand?: string;
   connectionMode?: "cloud" | "local";
   deviceId: string;
+  mcpDeviceId?: string | null;
   now?: Date;
   runsDir?: string;
   task: string;
@@ -191,7 +192,12 @@ export async function runLocalAgent(
     throw new Error("--local-serial requires --local");
   }
   const localSerial = localRun ? options.localSerial ?? rootOptions.device : undefined;
-  let deviceId = localRun ? (localSerial ?? "local") : getResolvedDevice(rootOptions.device);
+  const localAutoSelect = localRun && !localSerial;
+  let deviceId = localRun
+    ? (localSerial ?? "local adb device (auto-select)")
+    : getResolvedDevice(rootOptions.device);
+  let mcpDeviceId: string | null | undefined =
+    localRun && options.dryRun && localAutoSelect ? null : deviceId;
   if (!deviceId) {
     throw new AuthError("No default device configured. Run `handheld init` first.");
   }
@@ -210,12 +216,14 @@ export async function runLocalAgent(
       startTiny: false,
     });
     deviceId = connected.deviceId;
+    mcpDeviceId = deviceId;
   }
 
   const workspace = createRunWorkspace({
     apiUrl,
     connectionMode: localRun ? "local" : "cloud",
     deviceId,
+    mcpDeviceId,
     task,
     workspace: options.workspace,
     workspaceTemplate,
@@ -321,7 +329,7 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   }
 
   const mcpServer: HandheldMcpServerConfig = {
-    args: input.cliArgs ?? defaultMcpArgs(input.deviceId),
+    args: input.cliArgs ?? defaultMcpArgs(input.mcpDeviceId === undefined ? input.deviceId : input.mcpDeviceId),
     command: input.cliCommand ?? defaultMcpCommand(),
     env: {
       HANDHELD_API_URL: input.apiUrl,
@@ -336,6 +344,7 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
   const prompt = renderPrompt({
     connectionMode: input.connectionMode ?? "cloud",
     deviceId: input.deviceId,
+    mcpDeviceId: input.mcpDeviceId === undefined ? input.deviceId : input.mcpDeviceId,
     task: input.task,
     workspaceDir,
   });
@@ -604,11 +613,14 @@ function emitRunPrepared(input: {
 function renderPrompt(input: {
   connectionMode: "cloud" | "local";
   deviceId: string;
+  mcpDeviceId?: string | null;
   task: string;
   workspaceDir: string;
 }): string {
   const reconnectInstruction = input.connectionMode === "local"
-    ? `If the tool says no device is connected, call connect with deviceId "${input.deviceId}" and local true.`
+    ? input.mcpDeviceId === null
+      ? "If the tool says no device is connected, call connect with local true and no deviceId so Handheld can auto-pick the sole ready local adb device."
+      : `If the tool says no device is connected, call connect with deviceId "${input.mcpDeviceId ?? input.deviceId}" and local true.`
     : `If the tool says no device is connected, call connect with deviceId "${input.deviceId}".`;
   return `You are a Handheld local agent running in an isolated workspace.
 
@@ -651,7 +663,7 @@ function renderAgentWorkspaceReadme(template: WorkspaceTemplate = "default"): st
 This is a harness-shaped mobile agent workspace.
 
 - Use only Handheld MCP tools for device actions.
-- agent_helpers.py documents the normal CLI helper names, but cloud-loop agents should call MCP tools directly.
+- agent_helpers.py is an editable helper shim for normal CLI agents; cloud-loop agents should call MCP tools directly.
 - domain-skills/ stores package-keyed app maps.
 - interaction-skills/mobile/ stores reusable mobile mechanics.
 - evidence/ stores snapshots, screenshots, and final-state notes.
@@ -685,12 +697,19 @@ function writeHarnessWorkspaceTemplate(input: {
 }): void {
   writePrivateFile(
     join(input.agentWorkspaceDir, "agent_helpers.py"),
-    `"""Handheld harness helper names.
+    `"""Editable Handheld harness helper shim.
 
-Normal CLI agents can use handheld-harness Python helpers with these names.
-Cloud-loop agents should use Handheld MCP tools directly; this file is a map of
-the shared semantics, not a second runtime.
+This file is loaded by handheld_harness.helpers when HH_AGENT_WORKSPACE points
+at this directory. It imports the handheld-harness helper namespace, then leaves
+space for task-specific wrappers. It is not a second runtime: helpers still
+delegate to the handheld CLI/MCP boundary.
 """
+
+from handheld_harness.helpers import *  # noqa: F401,F403
+
+
+# Add task-specific helper wrappers below. Keep device actions delegated through
+# the imported handheld-harness helpers.
 `,
   );
   const skills: Record<string, string> = {
@@ -761,13 +780,14 @@ function getProjectRunsDir(): string {
   return resolve(process.cwd(), ".handheld", "runs");
 }
 
-function defaultCliArgs(deviceId: string): string[] {
+function defaultCliArgs(deviceId?: string | null): string[] {
   const cliPath = process.argv[1];
-  if (!cliPath) return ["--device", deviceId];
-  return [cliPath, "--device", deviceId];
+  const args = cliPath ? [cliPath] : [];
+  if (deviceId) args.push("--device", deviceId);
+  return args;
 }
 
-function defaultMcpArgs(deviceId: string): string[] {
+function defaultMcpArgs(deviceId?: string | null): string[] {
   return [...defaultCliArgs(deviceId), "--mcp"];
 }
 

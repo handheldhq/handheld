@@ -139,7 +139,47 @@ describe("handheld run workspace", () => {
       'connect with deviceId "emulator-5554" and local true',
     );
     expect(readFileSync(join(workspaceDir, "agent-workspace", "agent_helpers.py"), "utf8")).toContain(
-      "not a second runtime",
+      "from handheld_harness.helpers import *",
+    );
+  });
+
+  it("omits fake local device selectors when local dry-run auto-selects adb", async () => {
+    const workspaceDir = tempRoot();
+    const previousApiUrl = process.env.HANDHELD_API_URL;
+    delete process.env.HANDHELD_API_URL;
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      logs.push(String(value));
+    });
+    try {
+      await runLocalAgent(
+        "Observe",
+        {
+          agent: "codex",
+          dryRun: true,
+          local: true,
+          workspace: workspaceDir,
+          workspaceTemplate: "harness",
+        },
+        { json: true },
+      );
+    } finally {
+      spy.mockRestore();
+      if (previousApiUrl === undefined) {
+        delete process.env.HANDHELD_API_URL;
+      } else {
+        process.env.HANDHELD_API_URL = previousApiUrl;
+      }
+    }
+
+    const prepared = JSON.parse(logs.join("\n"));
+    const mcp = JSON.parse(readFileSync(prepared.mcpConfig, "utf8"));
+
+    expect(prepared.connected).toBeNull();
+    expect(mcp.mcpServers.handheld.args).not.toContain("--device");
+    expect(mcp.mcpServers.handheld.args).not.toContain("local");
+    expect(readFileSync(join(workspaceDir, "prompt.md"), "utf8")).toContain(
+      "call connect with local true and no deviceId",
     );
   });
 
