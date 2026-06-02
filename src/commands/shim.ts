@@ -106,11 +106,28 @@ function getRouteCliPath(): string {
 export function registerShimCommand(program: Command): void {
   const shim = program
     .command("shim", { hidden: true })
-    .description("manage ADB shim for transparent cloud phone connections");
+    .description("manage the ADB shim that transparently routes `adb` to cloud phones (subcommands: install, uninstall, status)")
+    .addHelpText(
+      "after",
+      `
+The shim wraps \`adb\` so existing scripts work against cloud phones unchanged:
+\`adb connect handheld:<device-id>\` and routable commands go through the relay
+fast path; everything else falls through to the real adb.
+
+Subcommands:
+  handheld shim install      # write the shim to ~/.handheld/bin/ (then add it to PATH, ahead of real adb)
+  handheld shim uninstall    # remove the shim
+  handheld shim status       # report whether it is installed and active (on PATH)
+
+Caveats:
+  - ~/.handheld/bin must come BEFORE the real adb on PATH; \`install\` prints the exact line to add.
+  - The real adb must still be installed — the shim shells out to it for non-routable commands.
+  - Routing only helps once a device is attached (\`handheld connect\`); otherwise commands just pass through.`
+    );
 
   shim
     .command("install")
-    .description("install ADB shim to ~/.handheld/bin/")
+    .description("install the ADB shim into ~/.handheld/bin/ (prints the PATH line to add)")
     .action(() => {
       const binDir = getBinDir();
       const isWin = platform() === "win32";
@@ -159,7 +176,7 @@ export function registerShimCommand(program: Command): void {
 
   shim
     .command("uninstall")
-    .description("remove ADB shim")
+    .description("remove the ADB shim from ~/.handheld/bin/")
     .action(() => {
       const binDir = getBinDir();
       for (const name of ["adb", "adb.cmd"]) {
@@ -174,7 +191,7 @@ export function registerShimCommand(program: Command): void {
 
   shim
     .command("status")
-    .description("check if ADB shim is active")
+    .description("report whether the ADB shim is installed and active (on PATH)")
     .action(() => {
       const binDir = getBinDir();
       const isWin = platform() === "win32";

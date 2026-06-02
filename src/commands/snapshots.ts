@@ -4,11 +4,43 @@ import { HandheldApiClient, type ProfileSnapshot, type SavedStateJob } from "../
 export function registerSnapshotsCommand(program: Command): void {
   const snapshots = program
     .command("snapshots", { hidden: true })
-    .description("list, capture, restore, and inspect profile saved-state snapshots");
+    .description(
+      "manage Gateway PROFILE saved-state snapshots (disk-image state heads) — not UI/screen snapshots (that's `snap`)"
+    )
+    .addHelpText(
+      "after",
+      `
+Profile saved-state snapshots are persisted disk-image state heads for a cloud
+profile (capture/restore). For an on-screen UI tree, use \`handheld snap\` instead.
+
+Subcommands:
+  handheld snapshots list <profileId>
+  handheld snapshots capture <profileId> [--idempotency-key <key>]
+  handheld snapshots restore <profileId> [--equipment-id <id>] [--idempotency-key <key>]
+  handheld snapshots job <profileId> <jobId>
+
+Caveats:
+  - All subcommands hit the Gateway and need an API key (\`handheld login\` / HANDHELD_API_KEY).
+  - capture/restore are async and return a job — poll it with \`handheld snapshots job <profileId> <jobId>\`.`
+    );
 
   snapshots
     .command("list <profileId>")
-    .description("list saved-state snapshots for a profile")
+    .description("list a profile's saved-state snapshots (state heads), newest first")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld snapshots list <profileId> [--json]
+
+Examples:
+  handheld snapshots list prof_abc123
+  handheld snapshots list prof_abc123 --json
+
+Caveats:
+  - <profileId> is a Gateway profile id (see \`handheld devices\`), and the command needs an API key.
+  - This lists saved disk-state heads, not UI snapshots — for a screen tree use \`handheld snap\`.`
+    )
     .action(async (profileId: string) => {
       const json = program.opts().json;
       try {
@@ -26,8 +58,23 @@ export function registerSnapshotsCommand(program: Command): void {
 
   snapshots
     .command("capture <profileId>")
-    .description("capture the profile's current saved-state head")
+    .description("capture the profile's current saved-state head (async job; ~minutes for a full disk image)")
     .option("--idempotency-key <key>", "stable request id for retries")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld snapshots capture <profileId> [--idempotency-key <key>]
+
+Examples:
+  handheld snapshots capture prof_abc123
+  handheld snapshots capture prof_abc123 --idempotency-key cap-2026-06-01
+
+Caveats:
+  - Needs an API key; <profileId> is a Gateway profile id from \`handheld devices\`.
+  - Async — returns a job. Poll \`handheld snapshots job <profileId> <jobId>\`; a full disk-image capture takes minutes.
+  - Pass --idempotency-key so a retry reuses the in-flight request instead of starting a second capture.`
+    )
     .action(async (profileId: string, opts: { idempotencyKey?: string }) => {
       const json = program.opts().json;
       try {
@@ -47,9 +94,25 @@ export function registerSnapshotsCommand(program: Command): void {
 
   snapshots
     .command("restore <profileId>")
-    .description("restore the profile's latest saved-state head")
+    .description("restore the profile's latest saved-state head onto clean equipment (async job; ~minutes)")
     .option("--equipment-id <id>", "explicit clean target equipment id")
     .option("--idempotency-key <key>", "stable request id for retries")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld snapshots restore <profileId> [--equipment-id <id>] [--idempotency-key <key>]
+
+Examples:
+  handheld snapshots restore prof_abc123
+  handheld snapshots restore prof_abc123 --equipment-id eq_xyz789
+
+Caveats:
+  - Needs an API key; <profileId> is a Gateway profile id from \`handheld devices\`.
+  - Restores the LATEST captured head — run \`handheld snapshots list <profileId>\` first to confirm what that is.
+  - Async — returns a job; poll \`handheld snapshots job <profileId> <jobId>\`. A full disk-image restore takes minutes.
+  - Omit --equipment-id to let the Gateway pick a clean target; pass it to pin a specific one.`
+    )
     .action(
       async (
         profileId: string,
@@ -78,7 +141,20 @@ export function registerSnapshotsCommand(program: Command): void {
 
   snapshots
     .command("job <profileId> <jobId>")
-    .description("show a profile capture or restore job")
+    .description("poll a saved-state capture or restore job by id")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld snapshots job <profileId> <jobId>
+
+Examples:
+  handheld snapshots job prof_abc123 job_def456
+
+Caveats:
+  - Needs an API key. The <jobId> is the one returned by \`handheld snapshots capture\`/\`restore\`.
+  - Re-run to poll: status moves through pending/running to a terminal state.`
+    )
     .action(async (profileId: string, jobId: string) => {
       const json = program.opts().json;
       try {
@@ -134,5 +210,6 @@ function formatBytes(value?: number | null): string {
 
 function fail(err: unknown): never {
   console.error("Error:", err instanceof Error ? err.message : String(err));
+  console.error("Hint: needs an API key (`handheld login`); confirm the profileId with `handheld devices`. For an on-screen UI tree use `handheld snap`, not `snapshots`.");
   process.exit(1);
 }

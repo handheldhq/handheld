@@ -7,14 +7,31 @@ import { RelayClient } from "../transport/relay/client.js";
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
-    .description("show active connections and transport health")
+    .description("show active connections and transport health (relay + ADB liveness per device)")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld status [--json]
+
+Examples:
+  handheld status          # per-device: session, relay ready/offline, ADB serial + tunnel liveness
+  handheld status --json   # same, structured (probes the relay live)
+
+Caveats:
+  - Reads locally saved connections — no API key needed. Empty output means nothing is attached: run \`handheld connect\`.
+  - "Relay: offline" or ADB "(dead)" means the transport dropped; reconnect with \`handheld connect <deviceId>\` (or \`--local\`).`
+    )
     .action(async () => {
       const json = program.opts().json;
       const connections = getConnections();
 
       if (connections.length === 0) {
         if (json) console.log(JSON.stringify({ connections: [] }));
-        else console.log("No active connections. Run `handheld connect <device-id>` first.");
+        else {
+          console.log("No active connections.");
+          console.log("Hint: attach a cloud phone with `handheld connect <device-id>`, or a local adb device with `handheld connect --local`.");
+        }
         return;
       }
 

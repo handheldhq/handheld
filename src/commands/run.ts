@@ -100,7 +100,7 @@ export type TinyWarmupPlan = {
 export function registerRunCommand(program: Command): void {
   program
     .command("run")
-    .description("run a mobile task with a local agent")
+    .description("run a mobile task with a local agent (claude|codex) against the default device (--tui to steer, --dry-run to preview)")
     .argument("<task...>", "task for the local agent")
     .option("--agent <agent>", "agent runtime to spawn (claude or codex)", DEFAULT_AGENT)
     .option("--claude <path>", "Claude Code executable", "claude")
@@ -112,6 +112,24 @@ export function registerRunCommand(program: Command): void {
     .option("--dry-run", "prepare the workspace and print the agent command without connecting or spawning")
     .option("--no-tiny-warmup", "do not start Tiny helper bootstrap in the background after connect")
     .option("--allow-api-key-env", "allow provider API-key env vars to reach the agent instead of forcing local CLI auth")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld run <task...> [--agent claude|codex] [--model <m>] [--tui] [--dry-run] [--workspace <path>]
+
+Examples:
+  handheld run "Open Settings and confirm Wi-Fi is on"      # one-shot Claude run against the default device
+  handheld run "Search Chrome for the weather" --model sonnet
+  handheld run "Inspect the current screen" --agent codex --model gpt-5
+  handheld run "Open Settings" --dry-run                     # print the workspace + agent command, connect nothing
+
+Caveats:
+  - Targets the default cloud device — run \`handheld init\` (or \`handheld config set default-device <id>\`) first; needs an API key.
+  - Spawns a local \`claude\`/\`codex\` binary; it must be installed and on PATH (override with --claude/--codex <path>).
+  - The agent gets ONLY the locked Handheld MCP server; provider API-key env vars are stripped unless you pass --allow-api-key-env.
+  - --tui is Claude-only (interactive Codex is unsupported); use plain \`handheld run --agent codex\` for headless Codex.`
+    )
     .action(async (taskParts: string[], options: RunCommandOptions, command: Command) => {
       const rootOptions = command.parent?.opts<RootOptions>() ?? {};
       try {
@@ -122,6 +140,15 @@ export function registerRunCommand(program: Command): void {
           console.error(JSON.stringify({ error: message, ok: false }));
         } else {
           console.error(`Run failed: ${message}`);
+          if (/default device|init/i.test(message)) {
+            console.error("Hint: no default device — run `handheld init` (or `handheld config set default-device <id>`) first.");
+          } else if (/api key|unauthor|auth/i.test(message)) {
+            console.error("Hint: authenticate first — `handheld login` (or set HANDHELD_API_KEY).");
+          } else if (/claude|codex|ENOENT|spawn|not found/i.test(message)) {
+            console.error("Hint: the agent binary must be installed and on PATH — point at it with --claude <path> / --codex <path>, or preview with --dry-run.");
+          } else {
+            console.error("Hint: try `handheld run <task> --dry-run` to inspect the workspace and command without spawning the agent.");
+          }
         }
         process.exit(1);
       }

@@ -30,8 +30,26 @@ export function resolveDisconnectTarget(
 export function registerDisconnectCommand(program: Command): void {
   program
     .command("disconnect [deviceId]")
-    .description("disconnect from a cloud phone")
+    .description("tear down a connection (--all for every device); local: drops the forward, cloud: also stops the session")
     .option("--all", "disconnect from all devices")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld disconnect [deviceId]   # bare form auto-resolves the sole connection
+  handheld disconnect --all        # tear down every attached device
+
+Examples:
+  handheld disconnect              # one device attached: tears it down
+  handheld disconnect prof_abc123  # name the device when several are attached
+  handheld disconnect --all        # disconnect everything
+
+Caveats:
+  - A bare \`disconnect\` only auto-picks when exactly one device is attached; with several, pass a deviceId or --all.
+  - Local connections tear down on this host only (drop the Tiny forward); they never call the Gateway, so no API key is needed.
+  - Cloud connections also stop the Gateway session — that requires a valid API key.
+  - See currently attached devices with \`handheld status\`.`
+    )
     .action(async (deviceId?: string, opts?: { all?: boolean }) => {
       const json = program.opts().json;
       if (opts?.all) {
@@ -92,7 +110,10 @@ export function registerDisconnectCommand(program: Command): void {
       );
       if ("error" in target) {
         if (json) console.log(JSON.stringify({ error: target.error, ok: false }));
-        else console.error(target.error);
+        else {
+          console.error(target.error);
+          console.error("Hint: run `handheld status` to list attached connections, then pass a deviceId or use `handheld disconnect --all`.");
+        }
         process.exit(1);
       }
       const resolvedDevice = target.deviceId;
@@ -104,7 +125,10 @@ export function registerDisconnectCommand(program: Command): void {
           error: `Not connected to ${resolvedDevice}`,
           ok: false,
         }));
-        else console.error(`Not connected to ${resolvedDevice}`);
+        else {
+          console.error(`Not connected to ${resolvedDevice}`);
+          console.error("Hint: run `handheld status` to see attached devices; this one already has no live connection (nothing to tear down).");
+        }
         process.exit(1);
       }
 
@@ -119,6 +143,7 @@ export function registerDisconnectCommand(program: Command): void {
           }));
         } else {
           console.error(`Failed to disconnect ${resolvedDevice}: ${errorMessage(error)}`);
+          console.error("Hint: the local teardown still ran; retry, or stop the session in the dashboard if the Gateway call failed.");
         }
         process.exit(1);
       }

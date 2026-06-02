@@ -418,25 +418,52 @@ const TOOLS = [
   },
   {
     name: "snap",
-    description: "Read Tiny-backed actionable UI snapshot refs",
+    description:
+      "Read the actionable UI snapshot for the connected device. Returns the compact, " +
+      "on-screen tree (structural containers collapsed) plus a totalNodeCount. " +
+      "Re-snap after every action: refs renumber on each screen change. " +
+      "Line grammar: `{indent}{bullet} @eN Role \"title\" subtitle=\"…\" = \"value\" [id=… focused disabled checked actions=[…]]`. " +
+      "bullet `-`, or `▶` when focused. @eN = actionable ref (pass to tap/type/…); read-only Text has NO ref (visible to read, not a target). " +
+      "Role is TitleCase (Button, TextField, Text, ScrollView, List, CheckBox, Switch, Image…). " +
+      "\"title\" = the element's name; subtitle= = its secondary line; = \"value\" = its current text (e.g. an editable field's contents). " +
+      "[ … ] holds id= (resource-id, package stripped), state (focused/disabled/checked/selected), and actions=[press,long_press,set_value,toggle,scroll]. " +
+      "`[other window · pkg]` = nodes from a different window than the foreground activity (status bar, nav bar). " +
+      "`[keyboard open · …]` = the IME, collapsed — use `type` to enter text, do not tap keys. " +
+      "The id= and \"title\" on actionable nodes double as durable selectors (id=…/label=…) you can pass to action tools instead of the volatile @eN ref.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        interactive: { type: "boolean", description: "Only return actionable refs" },
-        raw: { type: "boolean", description: "Include raw Tiny snapshot" },
-        screenshot: { type: "boolean", description: "Include base64 PNG screenshot" },
+        interactive: {
+          type: "boolean",
+          description:
+            "Default true: return only actionable nodes plus standalone readable text. " +
+            "Set false to also include structural/container nodes.",
+        },
+        raw: {
+          type: "boolean",
+          description:
+            "Include the complete unprocessed Tiny snapshot under `raw` (every field, never culled) alongside the normalized nodes.",
+        },
+        screenshot: {
+          type: "boolean",
+          description: "Also capture and include a base64 PNG screenshot of the current screen.",
+        },
       },
     },
   },
   {
     name: "click",
-    description: "Click a snapshot index/ref or screen coordinate pair",
+    description: "Click a snapshot ref, durable id=/label= selector, or screen coordinate pair",
     inputSchema: {
       type: "object" as const,
       properties: {
-        target: { type: "string", description: "Snapshot index/ref such as 7 or @e7" },
-        x: { type: "number" },
-        y: { type: "number" },
+        target: {
+          type: "string",
+          description:
+            "What to click: a @eN ref from the last snap (e.g. 7 or @e7; renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders — prefer for retries), or omit and pass x/y for raw coordinates.",
+        },
+        x: { type: "number", description: "X coordinate (use with y when no target ref is given)" },
+        y: { type: "number", description: "Y coordinate (use with x when no target ref is given)" },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
     },
@@ -471,28 +498,36 @@ const TOOLS = [
   },
   {
     name: "long_press",
-    description: "Long press a snapshot index/ref or coordinates",
+    description: "Long press a snapshot ref, durable id=/label= selector, or coordinates",
     inputSchema: {
       type: "object" as const,
       properties: {
         duration: { type: "number", description: "Duration in ms" },
-        target: { type: "string", description: "Snapshot index/ref such as 7 or @e7" },
-        x: { type: "number" },
-        y: { type: "number" },
+        target: {
+          type: "string",
+          description:
+            "What to long-press: a @eN ref from the last snap (e.g. 7 or @e7; renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders), or omit and pass x/y for raw coordinates.",
+        },
+        x: { type: "number", description: "X coordinate (use with y when no target ref is given)" },
+        y: { type: "number", description: "Y coordinate (use with x when no target ref is given)" },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
     },
   },
   {
     name: "double_tap",
-    description: "Double tap a snapshot index/ref or coordinates",
+    description: "Double tap a snapshot ref, durable id=/label= selector, or coordinates",
     inputSchema: {
       type: "object" as const,
       properties: {
         intervalMs: { type: "number", description: "Delay between taps in ms" },
-        target: { type: "string", description: "Snapshot index/ref such as 7 or @e7" },
-        x: { type: "number" },
-        y: { type: "number" },
+        target: {
+          type: "string",
+          description:
+            "What to double-tap: a @eN ref from the last snap (e.g. 7 or @e7; renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders), or omit and pass x/y for raw coordinates.",
+        },
+        x: { type: "number", description: "X coordinate (use with y when no target ref is given)" },
+        y: { type: "number", description: "Y coordinate (use with x when no target ref is given)" },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
     },
@@ -505,7 +540,11 @@ const TOOLS = [
       properties: {
         append: { type: "boolean", description: "Append instead of clearing first" },
         submit: { type: "boolean", description: "Press enter after typing" },
-        target: { type: "string", description: "Snapshot index/ref, or focused" },
+        target: {
+          type: "string",
+          description:
+            "Field to fill: a @eN ref from the last snap (renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders), or omit/\"focused\" to use the currently focused field.",
+        },
         text: { type: "string" },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
@@ -519,20 +558,28 @@ const TOOLS = [
       type: "object" as const,
       properties: {
         repeat: { type: "number", description: "Delete key repeat count" },
-        target: { type: "string", description: "Snapshot index/ref, or focused" },
+        target: {
+          type: "string",
+          description:
+            "Field to clear: a @eN ref from the last snap (renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders), or omit/\"focused\" to use the currently focused field.",
+        },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
     },
   },
   {
     name: "tap",
-    description: "Tap a snapshot index/ref or screen coordinate pair",
+    description: "Tap a snapshot ref, durable id=/label= selector, or screen coordinate pair",
     inputSchema: {
       type: "object" as const,
       properties: {
-        target: { type: "string", description: "Snapshot index/ref such as 7 or @e7" },
-        x: { type: "number", description: "X coordinate" },
-        y: { type: "number", description: "Y coordinate" },
+        target: {
+          type: "string",
+          description:
+            "What to tap: a @eN ref from the last snap (e.g. 7 or @e7; renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders — prefer for retries), or omit and pass x/y for raw coordinates.",
+        },
+        x: { type: "number", description: "X coordinate (use with y when no target ref is given)" },
+        y: { type: "number", description: "Y coordinate (use with x when no target ref is given)" },
         longPress: { type: "boolean", description: "Long press (optional)" },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
@@ -563,7 +610,11 @@ const TOOLS = [
         append: { type: "boolean", description: "Append instead of clearing when target is provided" },
         clear: { type: "boolean", description: "Clear before typing" },
         submit: { type: "boolean", description: "Press enter after typing" },
-        target: { type: "string", description: "Snapshot index/ref, or focused" },
+        target: {
+          type: "string",
+          description:
+            "Field to type into: a @eN ref from the last snap (renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders), or omit/\"focused\" to type into the currently focused field.",
+        },
         text: { type: "string", description: "Text to type" },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
@@ -675,9 +726,18 @@ const TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        condition: { type: "string", enum: ["stable", "text", "ref", "change"] },
-        timeoutMs: { type: "number" },
-        value: { type: "string" },
+        condition: {
+          type: "string",
+          enum: ["stable", "text", "ref", "change"],
+          description:
+            "What to wait for: `stable` = the UI stops changing; `text` = value appears in any node's text/label/id; `ref` = value resolves to a tappable node; `change` = the screen differs from the last snapshot. `text` and `ref` require `value`.",
+        },
+        timeoutMs: { type: "number", description: "Max time to wait in ms before giving up (default 5000)." },
+        value: {
+          type: "string",
+          description:
+            "For condition=text: substring to match in any node's text/label/id (case-insensitive). For condition=ref: a @eN ref or id=/label= selector to wait for. Ignored for stable/change.",
+        },
       },
       required: ["condition"],
     },
@@ -714,7 +774,12 @@ const TOOLS = [
     description: "List launchable app packages",
     inputSchema: {
       type: "object" as const,
-      properties: { system: { type: "boolean" } },
+      properties: {
+        system: {
+          type: "boolean",
+          description: "Include system/pre-installed packages too (default false: only user-installed, launchable apps).",
+        },
+      },
     },
   },
   {
@@ -790,7 +855,11 @@ const TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        target: { type: "string", description: "Snapshot index/ref, or focused" },
+        target: {
+          type: "string",
+          description:
+            "Field to paste into: a @eN ref from the last snap (renumbers on every screen change), a durable id=/label=/text= selector (survives re-renders), or omit/\"focused\" to use the currently focused field.",
+        },
         settleMs: { type: "number", description: "Post-action settle wait in ms" },
       },
     },
@@ -991,7 +1060,10 @@ async function runWithAdbFallback<T extends McpTransportResult>(
 ): Promise<T> {
   const primary = pick(command, relay, adb);
   if (!primary) {
-    return { ok: false, error: "Not connected" } as T;
+    return {
+      ok: false,
+      error: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device).",
+    } as T;
   }
   const result = await executeSafely(primary, execute);
   if (
@@ -1163,15 +1235,21 @@ function mcpPointFromArgs(
 ): { x: number; y: number } {
   if (typeof args?.target === "string" && args.target.trim()) {
     const snapshot = loadLastSnapshot(conn.deviceId);
-    if (!snapshot) throw new Error("No cached snapshot. Call snap first.");
+    if (!snapshot) {
+      throw new Error("No cached snapshot — call snap first, then pass a ref or id=/label= selector from it.");
+    }
     const point = pointFromSnapshotTarget(snapshot, args.target);
-    if (!point) throw new Error(`Snapshot ref ${args.target} is not tappable`);
+    if (!point) {
+      throw new Error(
+        `Target "${args.target}" did not resolve to a tappable node — refs renumber on every screen change, so re-snap, or use a durable id=/label= selector (or x/y coordinates).`
+      );
+    }
     return point;
   }
   if (typeof args?.x === "number" && typeof args?.y === "number") {
     return { x: args.x, y: args.y };
   }
-  throw new Error("target or x/y is required");
+  throw new Error("target or x/y is required — pass a @eN ref / id=/label= selector from the last snap, or both x and y coordinates.");
 }
 
 async function focusMcpTarget(input: {
@@ -1890,7 +1968,15 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
           const targetDeviceId = String(args?.deviceId ?? "");
           // A cloud connect needs a deviceId; a local connect can auto-pick.
           if (!targetDeviceId && !local) {
-            return { content: [{ type: "text", text: "deviceId is required" }], isError: true };
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "deviceId is required for a cloud connect — pass deviceId (see the devices tool), or set local:true to attach to a local adb device (omit deviceId to auto-pick the sole ready one).",
+                },
+              ],
+              isError: true,
+            };
           }
           const result = await connectDevice(targetDeviceId, { local });
           return {
@@ -1940,7 +2026,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
       relayToClose = relay;
       switch (name) {
         case "snap": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const raw = await readMcpSnapshotRaw({
             adb,
             api: () => new HandheldApiClient(),
@@ -1992,7 +2078,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         case "tap":
         case "click":
         case "click_at": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const point = mcpPointFromArgs(args, conn);
           const longPress = args?.longPress === true;
           return mcpTextResult(
@@ -2006,7 +2092,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "click_area": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const point = {
             x: Math.round(((args!.x1 as number) + (args!.x2 as number)) / 2),
             y: Math.round(((args!.y1 as number) + (args!.y2 as number)) / 2),
@@ -2022,7 +2108,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "long_press": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const point = mcpPointFromArgs(args, conn);
           const duration = optionalNumber(args, "duration") ?? 1000;
           return mcpTextResult(
@@ -2038,7 +2124,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "double_tap": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const point = mcpPointFromArgs(args, conn);
           return mcpTextResult(
             await settleMcpGesture(
@@ -2056,7 +2142,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "fill": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const beforeAction = await beginMcpActionWait(conn, args);
           let result: McpTransportResult;
           try {
@@ -2074,7 +2160,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "clear": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const beforeAction = await beginMcpActionWait(conn, args);
           const target = optionalString(args, "target");
           if (target && target !== "focused" && target !== "-") {
@@ -2116,7 +2202,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "type": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const beforeAction = await beginMcpActionWait(conn, args);
           const result = await focusClearAndTypeMcp({
             adb,
@@ -2201,7 +2287,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "wait_for": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const condition = requiredString(args, "condition").toLowerCase();
           const timeoutMs = optionalNumber(args, "timeoutMs") ?? 5000;
           if (!["stable", "text", "ref", "change"].includes(condition)) {
@@ -2335,14 +2421,14 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
 
         case "gps": {
           const transport = pick("gps", relay, adb);
-          if (!transport) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!transport) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const result = await transport.gps(args!.latitude as number, args!.longitude as number);
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
 
         case "clipboard": {
           const transport = pick("clipboard", relay, adb);
-          if (!transport) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!transport) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const result = await transport.clipboard(
             args!.action as "get" | "set",
             args!.text as string | undefined
@@ -2364,7 +2450,7 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
         }
 
         case "paste": {
-          if (!conn) return { content: [{ type: "text", text: "Not connected" }], isError: true };
+          if (!conn) return { content: [{ type: "text", text: "Not connected — call connect first (connect deviceId, or connect with local:true for a local adb device)." }], isError: true };
           const beforeAction = await beginMcpActionWait(conn, args);
           let result: McpTransportResult;
           try {

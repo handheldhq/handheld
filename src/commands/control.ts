@@ -178,7 +178,10 @@ function getTransport(program: Command): {
   const conn = deviceId ? getConnection(deviceId) : getActiveConnection();
 
   if (!conn) {
-    console.error("Not connected. Run `handheld connect <device-id>` first.");
+    console.error("Not connected.");
+    console.error(
+      "Hint: run `handheld connect --local` (local adb device/emulator) or `handheld connect <device-id>` (cloud phone) first; see `handheld guide workflow`."
+    );
     process.exit(1);
   }
 
@@ -263,6 +266,9 @@ function pickTransport(
   if (adb) return adb;
   if (relay) return relay;
   console.error("No transport available.");
+  console.error(
+    "Hint: the connection has neither a relay nor an ADB serial — reconnect (`handheld connect --local` keeps ADB; cloud connect needs a live relay session)."
+  );
   process.exit(1);
 }
 
@@ -396,7 +402,10 @@ async function settleAfterSuccess<T extends TransportResult>(
 async function ensureTinyState(connection: Connection): Promise<TinyState> {
   if (connection.tiny) return connection.tiny;
   if (!connection.adb.serial) {
-    console.error("Snapshot requires Tiny helper or ADB. Reconnect with ADB enabled.");
+    console.error("Snapshot requires the Tiny helper or ADB, and neither is available.");
+    console.error(
+      "Hint: reconnect with ADB enabled (`handheld connect --local`), or bootstrap the on-device helper with `handheld tiny bootstrap`. See `handheld guide troubleshooting`."
+    );
     process.exit(1);
   }
 
@@ -414,13 +423,15 @@ function tapTargetFromArgs(input: {
   if (shouldResolveSnapshotTarget(input)) {
     const snapshot = loadLastSnapshot(input.deviceId);
     if (!snapshot) {
-      console.error("No cached snapshot. Run `handheld snap -i` first.");
+      console.error(`No cached snapshot to resolve "${input.target}" against.`);
+      console.error("Hint: run `handheld snap` first — targets resolve against the last snapshot.");
       process.exit(1);
     }
     const center = pointFromSnapshotTarget(snapshot, input.target);
     if (!center) {
+      console.error(`Target "${input.target}" did not resolve to a tappable node.`);
       console.error(
-        `Target "${input.target}" did not resolve to a tappable node. Re-run \`handheld snap\` (refs change every screen), or use a durable id=/label= selector.`
+        "Hint: refs renumber on every screen change — re-run `handheld snap` and reread the refs, or use a durable id=/label=/text= selector (see `handheld guide selectors`)."
       );
       process.exit(1);
     }
@@ -428,17 +439,24 @@ function tapTargetFromArgs(input: {
   }
 
   if (input.y === undefined) {
-    console.error("Usage: handheld tap <x> <y> or handheld tap @eN");
+    console.error(`Could not interpret "${input.target}" as a target.`);
+    console.error(
+      "Hint: pass a ref/selector (e.g. @e7, id=submit, label=Submit) after `handheld snap`, or two numeric coordinates: `handheld tap <x> <y>`."
+    );
     process.exit(1);
   }
   const x = Number(input.target);
   const y = Number(input.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    console.error("Tap coordinates must be numbers.");
+    console.error(`Tap coordinates must be numbers (got "${input.target}" "${input.y}").`);
+    console.error(
+      "Hint: use `handheld tap <x> <y>` with integers, or a snapshot target like @e7 / id=… / label=… ."
+    );
     process.exit(1);
   }
   if (x < 0 || y < 0) {
     console.error(`Tap coordinates must be non-negative (got ${x}, ${y}).`);
+    console.error("Hint: coordinates are device pixels measured from the top-left corner (0,0).");
     process.exit(1);
   }
   return { x, y };
@@ -1339,9 +1357,29 @@ async function waitForSnapshotCondition(input: {
 export function registerControlCommands(program: Command): void {
   program
     .command("tap <target> [y]")
-    .description("tap at screen coordinates or cached snapshot ref")
+    .description("tap a snapshot target (@eN | id= | label= | text=) or `<x> <y>` coordinates")
     .option("--long", "long press")
     .option("--duration <ms>", "press duration in ms", parseIntOption)
+    .addHelpText(
+      "after",
+      `
+Target grammar:
+  <target>   one of: @eN ref (from the last snap) | id=… | label=… | text=… selector
+  <x> <y>    two numeric coordinates (device pixels from top-left)
+
+Examples:
+  handheld tap @e7                  # tap the ref from the last snapshot
+  handheld tap 'label=Submit'       # tap by visible name (survives re-renders)
+  handheld tap 540 960              # tap raw coordinates
+  handheld tap @e7 --long           # long press the ref
+
+Caveats:
+  - @eN refs renumber on EVERY screen change — re-run \`handheld snap\` before
+    reusing them, or prefer durable id=/label=/text= selectors.
+  - Raw coordinates are brittle across layouts/resolutions; use them last.
+  - The CLI settles after the tap by default (--no-settle to skip).
+  See \`handheld guide selectors\` for selector matching rules.`
+    )
     .action(async (target: string, y: string | undefined, opts) => {
       const { relay, adb, connection, deviceId } = getTransport(program);
       try {
@@ -1379,7 +1417,16 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("click <target> [y]", { hidden: true })
-    .description("click a snapshot index/ref or screen coordinates")
+    .description("alias of tap: click a snapshot index/ref/selector or `<x> <y>` coordinates")
+    .addHelpText(
+      "after",
+      `
+Alias of \`handheld tap\` (a bare numeric index like \`click 7\` is accepted as @e7).
+  handheld click @e7 | click 'id=submit' | click 540 960
+
+Caveat: @eN refs (and bare indices) renumber on every screen change — re-snap
+or use an id=/label= selector. Prefer \`handheld tap\`.`
+    )
     .action(async (target: string, y: string | undefined) => {
       const { relay, adb, connection, deviceId } = getTransport(program);
       try {
@@ -1406,7 +1453,15 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("click-at <x> <y>", { hidden: true })
-    .description("click at screen coordinates")
+    .description("click at raw `<x> <y>` device-pixel coordinates")
+    .addHelpText(
+      "after",
+      `
+  handheld click-at 540 960          # tap device pixel (540, 960)
+
+Caveat: coordinates are brittle across layouts/resolutions — prefer
+\`handheld tap @eN\` / a selector when a snapshot ref exists.`
+    )
     .action(async (x: string, y: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -1428,7 +1483,16 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("click-area <x1> <y1> <x2> <y2>", { hidden: true })
-    .description("click the center of a screen area")
+    .description("click the center of the `<x1> <y1> <x2> <y2>` rectangle")
+    .addHelpText(
+      "after",
+      `
+Taps the midpoint of the given rectangle (useful with a node's bounds=… attr,
+shown by \`handheld snap --bounds\`).
+  handheld click-area 100 200 400 260
+
+Caveat: coordinates are brittle — prefer a snapshot ref/selector when one exists.`
+    )
     .action(async (x1: string, y1: string, x2: string, y2: string) => {
       const { relay, adb, connection } = getTransport(program);
       const point = {
@@ -1455,8 +1519,22 @@ export function registerControlCommands(program: Command): void {
   program
     .command("long-press <target> [y]")
     .alias("long_press")
-    .description("long press a snapshot index/ref or screen coordinates")
+    .description("long press a snapshot target (@eN | id= | label= | text=) or `<x> <y>` (--duration ms)")
     .option("--duration <ms>", "press duration in ms", parseIntOption, 1000)
+    .addHelpText(
+      "after",
+      `
+Target grammar: same as \`tap\` — @eN | id=… | label=… | text=… | <x> <y>.
+
+Examples:
+  handheld long-press @e12                 # 1000ms by default
+  handheld long-press 'id=row_item' --duration 1500
+  handheld long-press 540 960
+
+Caveats:
+  - @eN refs renumber on every screen change — re-snap or use a durable selector.
+  - A bare numeric index (e.g. \`long-press 12\`) is treated as @e12.`
+    )
     .action(async (target: string, y: string | undefined, opts) => {
       const { relay, adb, connection, deviceId } = getTransport(program);
       try {
@@ -1494,8 +1572,22 @@ export function registerControlCommands(program: Command): void {
   program
     .command("double-tap <target> [y]")
     .alias("double_tap")
-    .description("double tap a snapshot index/ref or screen coordinates")
+    .description("double tap a snapshot target (@eN | id= | label= | text=) or `<x> <y>` (--interval ms)")
     .option("--interval <ms>", "delay between taps in ms", parseIntOption, 80)
+    .addHelpText(
+      "after",
+      `
+Target grammar: same as \`tap\` — @eN | id=… | label=… | text=… | <x> <y>.
+
+Examples:
+  handheld double-tap @e9
+  handheld double-tap 'label=Map'
+  handheld double-tap 540 960 --interval 120
+
+Caveats:
+  - @eN refs renumber on every screen change — re-snap or use a durable selector.
+  - A bare numeric index (e.g. \`double-tap 9\`) is treated as @e9.`
+    )
     .action(async (target: string, y: string | undefined, opts) => {
       const { relay, adb, connection, deviceId } = getTransport(program);
       try {
@@ -1522,8 +1614,20 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("swipe <x1> <y1> <x2> <y2>")
-    .description("swipe between coordinates")
+    .description("swipe from `<x1> <y1>` to `<x2> <y2>` (--duration ms)")
     .option("--duration <ms>", "swipe duration in ms", parseIntOption)
+    .addHelpText(
+      "after",
+      `
+Drags from the start to the end device-pixel coordinate.
+  handheld swipe 540 1600 540 600            # swipe up (content scrolls down)
+  handheld swipe 540 600 540 1600 --duration 500   # slower swipe down
+
+Caveats:
+  - Coordinates are raw device pixels; for simple list scrolling prefer
+    \`handheld scroll up|down|left|right\` (it computes the gesture for you).
+  - A longer --duration reads more like a finger; very short swipes can fling.`
+    )
     .action(async (x1: string, y1: string, x2: string, y2: string, opts) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -1558,13 +1662,35 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("type [targetOrText] [text...]")
-    .description("type text, optionally focusing and clearing a target first")
+    .description("type into the focused field (replaces); pass a target to focus first (--append, --submit)")
     .option("--target <ref>", "snapshot ref/index to focus before typing")
     .option("--x <x>", "x coordinate to focus before typing", Number)
     .option("--y <y>", "y coordinate to focus before typing", Number)
     .option("--append", "append without clearing when a target is provided")
     .option("--clear", "clear before typing (default when target/x/y is provided)")
     .option("--submit", "press enter after typing")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld type "text"                 # type into the currently focused field
+  handheld type <target> "text"        # focus <target> first, then type
+  <target> = @eN | id=… | label=… | text=…  (or - / "focused" for the focused field)
+
+Examples:
+  handheld type "hello world"               # replaces the focused field
+  handheld type 'label=Notes' "meeting"     # focus the field, then replace
+  handheld type @e5 "more" --append         # append instead of replacing
+  handheld type 'id=search' "wifi" --submit # type then press enter
+
+Caveats:
+  - Default REPLACES the field's contents (deterministic via the Tiny helper);
+    --append adds to the existing text instead.
+  - With no target and nothing focused, this fails ("No input field is focused")
+    rather than typing into the wrong screen — tap a field first or pass a target.
+  - @eN refs renumber on every screen change — re-snap or use an id=/label= selector.
+  - --x/--y focus by coordinate and must be given together. See \`handheld guide selectors\`.`
+    )
     .action(async (targetOrText: string | undefined, textParts: string[], opts) => {
       const targetFromPosition =
         targetOrText &&
@@ -1577,13 +1703,19 @@ export function registerControlCommands(program: Command): void {
         ? textParts.join(" ")
         : [targetOrText, ...textParts].filter(Boolean).join(" ");
       if (!text) {
-        console.error("Usage: handheld type [target] <text> [--append] [--submit]");
+        console.error("No text to type.");
+        console.error(
+          'Hint: pass the text, e.g. `handheld type "hello"` (focused field) or `handheld type label=Notes "hello"` (focus a target first).'
+        );
         process.exit(1);
       }
       const hasCoordinateFocus =
         Number.isFinite(opts.x) || Number.isFinite(opts.y);
       if (hasCoordinateFocus && (!Number.isFinite(opts.x) || !Number.isFinite(opts.y))) {
-        console.error("Both --x and --y are required for coordinate focus.");
+        console.error("Coordinate focus needs both --x and --y.");
+        console.error(
+          'Hint: pass both (e.g. `--x 540 --y 960`), or focus by ref/selector instead: `handheld type @e5 "text"`.'
+        );
         process.exit(1);
       }
       const { relay, adb, connection, deviceId } = getTransport(program);
@@ -1624,9 +1756,22 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("fill <target> <text...>", { hidden: true })
-    .description("focus an input target, clear it, and type text")
+    .description("focus a target (@eN | id= | label= | text=), clear it, and type (--append, --submit)")
     .option("--append", "append without clearing existing text")
     .option("--submit", "press enter after typing")
+    .addHelpText(
+      "after",
+      `
+Always focuses <target> first (unlike \`type\`, which defaults to the focused field).
+  handheld fill @e5 "hello world"
+  handheld fill 'label=Email' "me@example.com" --submit
+  handheld fill 'id=notes' "more text" --append
+
+Caveats:
+  - Replaces the field by default; --append keeps existing text.
+  - @eN refs renumber on every screen change — re-snap or use an id=/label= selector.
+  Prefer \`handheld type <target> "text"\`, which this command mirrors.`
+    )
     .action(async (target: string, textParts: string[], opts) => {
       const text = textParts.join(" ");
       const { relay, adb, connection, deviceId } = getTransport(program);
@@ -1655,8 +1800,21 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("clear [target]", { hidden: true })
-    .description("clear the focused field or an input target")
+    .description("clear the focused field, or focus a target (@eN | id= | label=) and clear it")
     .option("--repeat <count>", "delete key repeat count", parseIntOption, 80)
+    .addHelpText(
+      "after",
+      `
+  handheld clear                 # clear the currently focused field
+  handheld clear @e5             # focus the ref, then clear
+  handheld clear 'id=search' --repeat 120
+
+Caveats:
+  - With no target and nothing focused, this fails honestly ("No input field is
+    focused") rather than reporting a vacuous success — tap a field or pass a target.
+  - @eN refs renumber on every screen change — re-snap or use a durable selector.
+  - --repeat is the number of delete presses; raise it for very long fields.`
+    )
     .action(async (target: string | undefined, opts) => {
       const { relay, adb, connection, deviceId } = getTransport(program);
       try {
@@ -1703,7 +1861,19 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("key <key>", { hidden: true })
-    .description("press a key name or Android keycode")
+    .description("press a key by name (back, home, enter, paste, …) or numeric Android keycode")
+    .addHelpText(
+      "after",
+      `
+Accepts an alias (back, home, recent/recents, enter, escape, tab, search, paste,
+backspace/del, delete, arrow_up/down/left/right, volume_up/down, power, menu,
+app_switch), a raw KeyEvent name (e.g. VOLUME_MUTE), or a numeric keycode.
+  handheld key enter | key back | key 4 | key volume_up
+
+Caveat: un-aliased symbolic names are uppercased before dispatch (Android's
+keyCodeFromString is case-sensitive). Prefer \`handheld press-key\` (same behavior,
+visible in --help) or the \`back\`/\`home\`/\`recent\` shortcuts.`
+    )
     .action(async (key: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -1726,7 +1896,15 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("system-button <button>", { hidden: true })
-    .description("press a system button (back, home, recent, enter)")
+    .description("press a system button: back | home | recent | enter")
+    .addHelpText(
+      "after",
+      `
+  handheld system-button back | system-button home | system-button recent
+
+Caveat: thin wrapper over the key path. Prefer the dedicated shortcuts
+\`handheld back\` / \`home\` / \`recent\`, which are visible in \`handheld --help\`.`
+    )
     .action(async (button: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -1746,7 +1924,16 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("keycode <keycode>", { hidden: true })
-    .description("press a raw Android keycode")
+    .description("press a raw numeric Android keycode (KeyEvent.KEYCODE_*)")
+    .addHelpText(
+      "after",
+      `
+  handheld keycode 4      # KEYCODE_BACK
+  handheld keycode 66     # KEYCODE_ENTER
+  handheld keycode 187    # KEYCODE_APP_SWITCH (recent apps)
+
+Caveat: takes a number only — for names use \`handheld press-key <name>\`.`
+    )
     .action(async (keycode: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -1767,7 +1954,19 @@ export function registerControlCommands(program: Command): void {
   program
     .command("press-key <key>")
     .alias("press_key")
-    .description("press a key name or Android keycode")
+    .description("press a key by name (back, home, enter, paste, …) or numeric Android keycode")
+    .addHelpText(
+      "after",
+      `
+Accepts an alias (back, home, recent/recents, enter, escape, tab, search, paste,
+backspace/del, delete, arrow_up/down/left/right, volume_up/down, power, menu,
+app_switch), a raw KeyEvent name (e.g. VOLUME_MUTE), or a numeric keycode.
+  handheld press-key enter | press-key back | press-key 4 | press-key volume_up
+
+Caveat: un-aliased symbolic names are uppercased before dispatch (Android's
+keyCodeFromString is case-sensitive). For Enter after typing, prefer
+\`handheld type … --submit\`; for navigation use \`back\` / \`home\` / \`recent\`.`
+    )
     .action(async (key: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -1785,6 +1984,41 @@ export function registerControlCommands(program: Command): void {
       }
     });
 
+  // Navigation shortcuts. `recent`/`recents`/`menu` all open the Android app
+  // switcher; `back`/`home` press the system back/home buttons. Each gets a short
+  // help block noting that the switcher view animates and may never settle, so a
+  // snapshot taken right after can be transient (re-snap or use `open-app`). (#3)
+  const navHelp: Record<string, string> = {
+    back: `
+Presses the system Back button (KEYCODE_BACK).
+  handheld back
+
+Caveat: re-run \`handheld snap\` afterward — the screen changed, so cached @eN
+refs no longer apply.`,
+    home: `
+Presses the system Home button — returns to the launcher.
+  handheld home
+
+Caveat: re-snap after navigating; refs from the previous screen are now stale.`,
+    recent: `
+Opens the recent-apps switcher (KEYCODE_APP_SWITCH).
+  handheld recent
+
+Caveat: the switcher animates and may never settle, so a snapshot taken right
+after can be empty/transient. To switch apps reliably use \`handheld open-app <pkg>\`.`,
+    recents: `
+Alias of \`handheld recent\` — opens the recent-apps switcher.
+  handheld recents
+
+Caveat: the switcher animates and may never settle; prefer \`handheld open-app\`
+to switch apps reliably, then re-snap.`,
+    menu: `
+Opens the recent-apps switcher (Android app switcher), not a contextual menu.
+  handheld menu
+
+Caveat: the switcher animates and may never settle; prefer \`handheld open-app\`
+to switch apps reliably, then re-snap.`,
+  };
   for (const [name, key] of [
     ["back", "back"],
     ["home", "home"],
@@ -1795,6 +2029,7 @@ export function registerControlCommands(program: Command): void {
     program
       .command(name)
       .description(name === "menu" ? "open recent apps (Android app switcher)" : `press ${key}`)
+      .addHelpText("after", navHelp[name]!)
       .action(async () => {
         const { relay, adb, connection } = getTransport(program);
         try {
@@ -1874,11 +2109,28 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("screenshot")
-    .description("capture a screenshot (JPEG by default; falls back to PNG)")
+    .description("capture a screenshot [--output <file>] [--base64] [--format jpg|png] [--quality 1-100]")
     .option("--output <file>", "save to file")
     .option("--base64", "output raw base64 to stdout")
     .option("--format <fmt>", "image format: jpg (default) or png", "jpg")
     .option("--quality <n>", "jpeg quality 1-100", parseIntOption, 80)
+    .addHelpText(
+      "after",
+      `
+JPEG via the Tiny helper (~5-10x smaller than PNG, faster over relay) is the
+default; falls back to PNG screencap if Tiny is unreachable. With no flags the
+image is written to ./handheld-screenshot-<ts>.<ext> and the path is printed.
+
+Examples:
+  handheld screenshot                          # save JPEG to a timestamped file
+  handheld screenshot --output shot.png --format png
+  handheld screenshot --base64 > shot.b64      # raw base64 to stdout
+
+Caveats:
+  - Pixels, not structure — for tappable targets/refs use \`handheld snap\`
+    (or \`handheld snap --screenshot\` to get both at once).
+  - --base64 and \`--json\` both emit base64 to stdout (no file written).`
+    )
     .action(async (opts) => {
       const ctx = getTransport(program);
       try {
@@ -1912,7 +2164,7 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("snap")
-    .description("print Tiny-backed actionable snapshot refs")
+    .description("print the actionable snapshot tree [-i] [--all] [--offscreen] [--bounds] [--raw|--json] [--screenshot]")
     .option("-i, --interactive", "show only actionable refs")
     .option("--all", "include structural containers + off-screen nodes (full tree)")
     .option("--offscreen", "include off-screen nodes (skip viewport culling)")
@@ -1922,6 +2174,31 @@ export function registerControlCommands(program: Command): void {
     .option("--screenshot", "include a screenshot with the snapshot")
     .option("--screenshot-base64", "include screenshot base64 in non-JSON output")
     .option("--screenshot-output <file>", "save screenshot to file")
+    .addHelpText(
+      "after",
+      `
+The core observe step: prints each on-screen node as
+  - @eN Role "title" subtitle="…" = "value" [id=… focused actions=[press,…]]
+and caches the snapshot so tap/type/… can resolve @eN / id= / label= / text=
+targets against it. Read \`handheld guide format\` for the full line grammar.
+
+Views:
+  handheld snap              # default: compact, collapsed, on-screen tree
+  handheld snap -i           # only actionable refs (no read-only text)
+  handheld snap --all        # full uncollapsed tree incl. off-screen + keyboard keys
+  handheld snap --offscreen  # keep below-the-fold nodes (still collapsed)
+  handheld snap --raw        # raw Tiny snapshot JSON (every field, never culled)
+  handheld snap --json       # structured node list (--json is a global flag)
+  handheld snap --screenshot # also capture a JPEG alongside the tree
+
+Caveats:
+  - The default view drops off-screen nodes; a "[N more below — scroll: …]" line
+    means there is more content — \`handheld scroll down\` then re-snap.
+  - A soft keyboard collapses to one "[keyboard open · … ]" line — enter text with
+    \`handheld type\`, don't tap keys (pass --all to expand them).
+  - Every screen change RENUMBERS @eN refs, so re-snap before reusing them; for
+    durable handles use id=/label=/text= selectors (\`handheld guide selectors\`).`
+    )
     .action(async (opts) => {
       const { connection, deviceId, relay, adb } = getTransport(program);
       try {
@@ -2005,7 +2282,20 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("shell <command>")
-    .description("execute shell command on device")
+    .description("run a shell command on the device (quote the whole command)")
+    .addHelpText(
+      "after",
+      `
+Runs the command on the device and prints stdout.
+  handheld shell 'getprop ro.product.model'
+  handheld shell 'dumpsys battery'
+  handheld shell 'pm list packages -3'
+
+Caveats:
+  - Quote the whole command so your local shell doesn't split/expand it.
+  - Runs over the relay/ADB device shell; some commands need root or are blocked
+    on cloud devices. A non-zero device exit surfaces as a failure.`
+    )
     .action(async (command: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -2028,6 +2318,9 @@ export function registerControlCommands(program: Command): void {
           }
         } else {
           console.error("Shell failed:", settled.error);
+          console.error(
+            "Hint: quote the whole command; some commands need root or are blocked on cloud devices. Check connectivity with `handheld shell 'echo ok'`."
+          );
           process.exit(1);
         }
       } finally {
@@ -2037,7 +2330,17 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("wait [seconds]", { hidden: true })
-    .description("wait for a duration")
+    .description("sleep for [seconds] (default 1) — a blind delay")
+    .addHelpText(
+      "after",
+      `
+  handheld wait        # sleep 1 second
+  handheld wait 2.5    # sleep 2.5 seconds
+
+Caveat: a blind sleep. Prefer condition-based waits — \`handheld wait-for stable\`
+(UI quiet), \`wait-for text|ref <value>\`, or \`wait-for change\` — which return as
+soon as the condition holds. Actions already settle by default.`
+    )
     .action(async (seconds = "1") => {
       const ms = Math.max(0, Number(seconds) * 1000);
       await new Promise((resolve) => setTimeout(resolve, ms));
@@ -2046,17 +2349,43 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("wait-for <condition> [value]", { hidden: true })
-    .description("wait for stable UI, text, ref, or snapshot change")
+    .description("wait for a UI condition: stable | text <s> | ref <@eN|id=…> | change (--timeout ms)")
     .option("--timeout <ms>", "wait timeout in ms", parseIntOption, 5000)
+    .addHelpText(
+      "after",
+      `
+Conditions:
+  stable          the UI goes quiet (no layout changes)
+  text <value>    a node's label/value contains <value> (case-insensitive)
+  ref <target>    a target resolves — @eN | id=… | label=… | text=…
+  change          the screen differs from the last cached snapshot
+
+Examples:
+  handheld wait-for stable
+  handheld wait-for text "Logged in" --timeout 8000
+  handheld wait-for ref 'id=home_tab'
+
+Caveats:
+  - Polls by re-snapshotting until the condition holds or --timeout elapses; a
+    timeout exits non-zero.
+  - \`change\` compares against the LAST snapshot — take one (\`handheld snap\`)
+    before the action you want to detect.`
+    )
     .action(async (condition: string, value: string | undefined, opts) => {
       const { connection, deviceId } = getTransport(program);
       const normalized = condition.toLowerCase();
       if (!["stable", "text", "ref", "change"].includes(normalized)) {
-        console.error("Condition must be one of: stable, text, ref, change");
+        console.error(`Unknown wait-for condition "${condition}".`);
+        console.error("Hint: use one of: stable | text <value> | ref <target> | change.");
         process.exit(1);
       }
       if ((normalized === "text" || normalized === "ref") && !value) {
-        console.error(`handheld wait-for ${normalized} requires a value`);
+        console.error(`\`handheld wait-for ${normalized}\` needs a value.`);
+        console.error(
+          normalized === "text"
+            ? 'Hint: pass the text to wait for, e.g. `handheld wait-for text "Logged in"`.'
+            : "Hint: pass a target to wait for, e.g. `handheld wait-for ref id=home_tab`."
+        );
         process.exit(1);
       }
       const timeoutMs = Math.max(0, Number(opts.timeout));
@@ -2094,11 +2423,26 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("scroll <direction>", { hidden: true })
-    .description("scroll up, down, left, or right")
+    .description("scroll the screen: up | down | left | right (--duration ms)")
     .option("--duration <ms>", "swipe duration in ms", parseIntOption, 300)
+    .addHelpText(
+      "after",
+      `
+Computes a swipe across the screen center from the device size, so you don't
+have to. Direction is the FINGER direction: \`scroll down\` reveals content above,
+\`scroll up\` reveals content below.
+  handheld scroll up        # reveal content further down the page
+  handheld scroll down --duration 500
+
+Caveats:
+  - The default snap drops off-screen nodes; when you see "[N more below …]",
+    \`scroll up\` then re-snap to bring them on-screen.
+  - For a precise gesture (e.g. a small in-list drag) use \`handheld swipe\`.`
+    )
     .action(async (direction: string, opts) => {
       if (!["up", "down", "left", "right"].includes(direction)) {
-        console.error("Direction must be one of: up, down, left, right");
+        console.error(`Unknown scroll direction "${direction}".`);
+        console.error("Hint: use one of: up | down | left | right.");
         process.exit(1);
       }
       const { relay, adb, connection } = getTransport(program);
@@ -2128,8 +2472,20 @@ export function registerControlCommands(program: Command): void {
   program
     .command("list-apps")
     .alias("list_apps")
-    .description("list launchable app packages")
+    .description("list launchable app packages [--system for every installed package]")
     .option("--system", "include all packages, not just launchable apps")
+    .addHelpText(
+      "after",
+      `
+Prints one package id per line — the exact value \`handheld open-app <package>\`
+expects.
+  handheld list-apps                  # launchable apps only
+  handheld list-apps --system         # every installed package (incl. system)
+  handheld list-apps --json           # JSON array (--json is a global flag)
+
+Caveat: --system is a long list; filter with \`grep\` (e.g. \`handheld list-apps
+--system | grep chrome\`).`
+    )
     .action(async (opts) => {
       const { relay, adb } = getTransport(program);
       try {
@@ -2159,13 +2515,32 @@ export function registerControlCommands(program: Command): void {
   program
     .command("open-app <nameOrPackage>")
     .alias("open_app")
-    .description("open an app by package, alias, or package-like name")
+    .description("open an app by package id, built-in alias (chrome, settings, …), or package-like name")
+    .addHelpText(
+      "after",
+      `
+Resolves <nameOrPackage> against the installed apps, then launches it and waits
+for its window so the next \`snap\` sees the app (not just System UI).
+  handheld open-app com.android.chrome
+  handheld open-app chrome             # built-in alias
+  handheld open-app settings
+
+Aliases: chrome, settings, gmail, maps, play/"play store", youtube, files.
+
+Caveats:
+  - Use \`handheld list-apps\` to find the exact package id when unsure.
+  - This is the reliable way to switch apps — more so than \`recent\`, whose
+    switcher animates and may not settle. Re-snap after the app opens.`
+    )
     .action(async (nameOrPackage: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
         const app = await resolveInstalledApp(relay, adb, nameOrPackage);
         if (!app) {
           console.error(`App not found: ${nameOrPackage}`);
+          console.error(
+            "Hint: pass an installed package id (see `handheld list-apps`) or a built-in alias (chrome, settings, gmail, maps, play, youtube, files)."
+          );
           process.exit(1);
         }
         await settleCommandResult(
@@ -2187,11 +2562,27 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("launch [target]")
-    .description("launch an Android intent, deep link, component, or raw `am ...` command")
+    .description("launch a deep link / intent / component [--action] [--data <uri>] [--component] [--package]")
     .option("--action <action>", "intent action", "android.intent.action.VIEW")
     .option("--data <uri>", "intent data/deep link URI")
     .option("--component <component>", "component name, such as com.example/.MainActivity")
     .option("--package <packageName>", "limit intent resolution to a package")
+    .addHelpText(
+      "after",
+      `
+A bare [target] is taken as the intent data URI (deep link); --action defaults to
+VIEW. Or target a component/package explicitly.
+  handheld launch https://example.com           # open a URL (VIEW)
+  handheld launch myapp://path/to/screen        # custom-scheme deep link
+  handheld launch --component com.example/.MainActivity
+  handheld launch --data 'geo:37.7,-122.4' --package com.google.android.apps.maps
+
+Caveats:
+  - \`am start\` exits 0 even when nothing resolves; this command parses the output
+    so an unresolved intent reports a failure instead of a false success.
+  - To just open an installed app by name, \`handheld open-app <pkg>\` is simpler.
+  - Re-snap after launch; the screen (and refs) changed.`
+    )
     .action(async (target: string | undefined, opts) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -2225,7 +2616,16 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("current-app", { hidden: true })
-    .description("print the current foreground package")
+    .description("print the foreground component (package/activity)")
+    .addHelpText(
+      "after",
+      `
+  handheld current-app          # prints e.g. com.android.settings/.Settings
+  handheld current-app --json   # { packageName, activity, component, … }
+
+Note: \`handheld snap\` already shows the foreground app/activity in its header,
+so a separate call is rarely needed.`
+    )
     .action(async () => {
       const { relay, adb } = getTransport(program);
       try {
@@ -2253,13 +2653,25 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("stop-app <nameOrPackage>", { hidden: true })
-    .description("force-stop an app by package, alias, or package-like name")
+    .description("force-stop an app by package id, built-in alias, or package-like name")
+    .addHelpText(
+      "after",
+      `
+  handheld stop-app com.android.chrome
+  handheld stop-app chrome          # built-in alias
+
+Caveat: force-stops the process (like Settings > Force stop). Re-snap afterward;
+the foreground app likely changed.`
+    )
     .action(async (nameOrPackage: string) => {
       const { relay, adb, connection } = getTransport(program);
       try {
         const app = await resolveInstalledApp(relay, adb, nameOrPackage);
         if (!app) {
           console.error(`App not found: ${nameOrPackage}`);
+          console.error(
+            "Hint: pass an installed package id (see `handheld list-apps`) or a built-in alias (chrome, settings, gmail, maps, play, youtube, files)."
+          );
           process.exit(1);
         }
         await settleCommandResult(
@@ -2275,7 +2687,17 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("gps <latitude> <longitude>", { hidden: true })
-    .description("set GPS coordinates")
+    .description("set the device's mock GPS location to `<latitude> <longitude>`")
+    .addHelpText(
+      "after",
+      `
+  handheld gps 37.7749 -122.4194        # San Francisco
+
+Caveats:
+  - Decimal degrees; latitude then longitude (note: lat first, unlike "lng,lat").
+  - Requires a transport that supports mock location (cloud relay); not all
+    devices honor it.`
+    )
     .action(async (lat: string, lon: string) => {
       const { relay, adb } = getTransport(program);
       try {
@@ -2289,10 +2711,23 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("clipboard <action> [text]", { hidden: true })
-    .description("get or set device clipboard")
+    .description("get or set the device clipboard: `clipboard get` | `clipboard set <text>`")
+    .addHelpText(
+      "after",
+      `
+  handheld clipboard set "hello world"
+  handheld clipboard get
+
+Caveats:
+  - \`set\` uses the Tiny helper's ClipboardManager (works on API 31+, where
+    \`cmd clipboard set\` does not). \`copy\` is the friendlier alias for set.
+  - \`get\` is restricted on API 29+ (foreground app / default IME only) and
+    usually fails with a clear message rather than returning stale data.`
+    )
     .action(async (action: string, text?: string) => {
       if (action !== "get" && action !== "set") {
-        console.error("Usage: handheld clipboard get|set [text]");
+        console.error(`Unknown clipboard action "${action}".`);
+        console.error('Hint: use `handheld clipboard get` or `handheld clipboard set "<text>"`.');
         process.exit(1);
       }
       const { relay, adb, connection } = getTransport(program);
@@ -2316,7 +2751,18 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("copy <text...>")
-    .description("copy text to the device clipboard")
+    .description("copy text to the device clipboard (then `paste` into a field)")
+    .addHelpText(
+      "after",
+      `
+  handheld copy "hello world"          # set the device clipboard
+  handheld copy multi word text        # unquoted words are joined with spaces
+
+Caveats:
+  - Sets the clipboard via the Tiny helper (works on API 31+). Pair with
+    \`handheld paste\` to insert it into a focused field.
+  - To put text directly into a field, \`handheld type "…"\` is usually simpler.`
+    )
     .action(async (textParts: string[]) => {
       const text = textParts.join(" ");
       const { relay, adb, connection } = getTransport(program);
@@ -2333,7 +2779,20 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("paste [target]")
-    .description("paste clipboard text into the focused field or a target")
+    .description("paste the clipboard into the focused field, or focus a target (@eN | id= | label=) first")
+    .addHelpText(
+      "after",
+      `
+  handheld paste                 # paste into the currently focused field
+  handheld paste @e5             # focus the ref, then paste
+  handheld paste 'id=search'
+
+Caveats:
+  - With no target and nothing focused, this fails ("No input field is focused")
+    instead of pasting into the wrong screen — tap a field or pass a target.
+  - Pastes the DEVICE clipboard (set it with \`handheld copy\`), not your host's.
+  - @eN refs renumber on every screen change — re-snap or use a durable selector.`
+    )
     .action(async (target: string | undefined) => {
       const { relay, adb, connection, deviceId } = getTransport(program);
       try {
@@ -2359,26 +2818,66 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("pull <remote> [local]", { hidden: true })
-    .description("pull file from device (ADB only)")
+    .description("pull a file from the device to the host (ADB transport only)")
+    .addHelpText(
+      "after",
+      `
+  handheld pull /sdcard/Download/log.txt
+  handheld pull /sdcard/screenshot.png ./shot.png   # [local] defaults to .
+
+Caveat: ADB-only — not available on relay-only (cloud) connections. Connect with
+\`handheld connect --local\` for a device that supports it.`
+    )
     .action(async (remote: string, local?: string) => {
       const { adb } = getTransport(program);
       if (!adb) {
-        console.error("Pull requires ADB transport. Reconnect with ADB enabled.");
+        console.error("Pull requires an ADB transport, which this connection doesn't have.");
+        console.error(
+          "Hint: reconnect a local device with `handheld connect --local` (relay-only cloud connections can't pull files)."
+        );
         process.exit(1);
       }
       const result = await adb.pull(remote, local ?? ".");
       if (program.opts().json) console.log(JSON.stringify(result));
-      else if (!result.ok) console.error("Pull failed:", result.error);
+      else if (!result.ok) {
+        console.error("Pull failed:", result.error);
+        console.error(
+          "Hint: check the remote path exists (`handheld shell 'ls <remote>'`) and is readable; the [local] destination dir must be writable."
+        );
+        process.exitCode = 1;
+      }
     });
 
   const tinyCommand = program
     .command("tiny")
-    .description("manage the bundled Tiny snapshot helper");
+    .description("manage the bundled Tiny snapshot helper (subcommands: bootstrap, install, start)")
+    .addHelpText(
+      "after",
+      `
+Tiny is the on-device instrumentation that serves snapshots and input. \`connect\`
+bootstraps it automatically; use these only to recover a broken helper.
+  handheld tiny bootstrap          # upload + install + start (the usual fix)
+  handheld tiny bootstrap --force  # reinstall after rebuilding Tiny
+See \`handheld guide troubleshooting\` for "snapshot fails / Tiny unavailable".`
+    );
 
   tinyCommand
     .command("bootstrap")
-    .description("upload, install, and start Tiny through the active session")
+    .description("upload, install, and start Tiny through the active session [--force to reinstall]")
     .option("--force", "uninstall any existing Tiny first, then reinstall the bundled APK (use after rebuilding Tiny)")
+    .addHelpText(
+      "after",
+      `
+The one-shot fix when snapshots fail: uploads the bundled APK, installs it, and
+starts the instrumentation (idempotent — reuses a healthy Tiny).
+  handheld tiny bootstrap
+  handheld tiny bootstrap --force   # force a clean uninstall + reinstall
+
+Caveats:
+  - Only one UiAutomation can be resident at a time; if another tool holds it
+    (agent-device, a stray instrumentation), stop that first.
+  - The first snapshot after a fresh install can take up to ~30s.`
+    )
     .action(async (opts) => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -2408,7 +2907,15 @@ export function registerControlCommands(program: Command): void {
 
   tinyCommand
     .command("install")
-    .description("upload and install the bundled Tiny APK through the active session")
+    .description("upload and install the bundled Tiny APK (does not start it)")
+    .addHelpText(
+      "after",
+      `
+  handheld tiny install
+
+Caveat: installs only — run \`handheld tiny start\` afterward, or just use
+\`handheld tiny bootstrap\`, which installs AND starts in one step.`
+    )
     .action(async () => {
       const { relay, adb, connection } = getTransport(program);
       try {
@@ -2442,7 +2949,15 @@ export function registerControlCommands(program: Command): void {
 
   tinyCommand
     .command("start")
-    .description("start Tiny instrumentation through the active session")
+    .description("start the (already-installed) Tiny instrumentation and wait until it's ready")
+    .addHelpText(
+      "after",
+      `
+  handheld tiny start
+
+Caveat: assumes the APK is already installed (\`handheld tiny install\` first), or
+just use \`handheld tiny bootstrap\` to install + start together.`
+    )
     .action(async () => {
       const { relay, adb } = getTransport(program);
       try {
@@ -2470,12 +2985,23 @@ export function registerControlCommands(program: Command): void {
 
   program
     .command("upload <localFile> [remotePath]", { hidden: true })
-    .description("upload file to an active Gateway session")
+    .description("upload a local file to the active Gateway session [--install] [--package] [--chmod] [--persist]")
     .option("--install", "install APK after upload")
     .option("--package <packageName>", "package name for APK installs")
     .option("--chmod <mode>", "chmod uploaded file after push")
     .option("--persist", "also save the upload to the file library")
     .option("--library-path <path>", "library path when --persist is used")
+    .addHelpText(
+      "after",
+      `
+Pushes a host file through the active Gateway session (cloud devices).
+  handheld upload ./app.apk --install --package com.example.app
+  handheld upload ./data.bin /sdcard/data.bin --chmod 644
+
+Caveats:
+  - Needs an active Gateway session (a cloud connect with an API key).
+  - For a local ADB device, \`handheld install <path>\` pushes APKs directly.`
+    )
     .action(async (localFile: string, remotePath: string | undefined, opts) => {
       try {
         const { connection, deviceId } = getTransport(program);
@@ -2496,13 +3022,25 @@ export function registerControlCommands(program: Command): void {
         else console.log(`Uploaded to ${result.path ?? "session"}`);
       } catch (err) {
         console.error("Upload failed:", (err as Error).message);
+        console.error(
+          "Hint: needs an active Gateway session (cloud connect with an API key) and a readable local file. For a local ADB device, use `handheld install <path>`."
+        );
         process.exit(1);
       }
     });
 
   program
     .command("install <source>", { hidden: true })
-    .description("install APK from URL or local path")
+    .description("install an APK from a URL or local path (ADB push, or session upload)")
+    .addHelpText(
+      "after",
+      `
+  handheld install ./app.apk                       # local path
+  handheld install https://example.com/app.apk     # URL (uploaded + installed)
+
+Caveat: a local path installs over ADB when available, else uploads through the
+Gateway session. A URL is fetched and installed server-side via the session.`
+    )
     .action(async (source: string) => {
       if (source.startsWith("http://") || source.startsWith("https://")) {
         const { deviceId } = getTransport(program);
@@ -2520,8 +3058,13 @@ export function registerControlCommands(program: Command): void {
         if (adb) {
           const result = await adb.install(source);
           if (program.opts().json) console.log(JSON.stringify(result));
-          else if (!result.ok) console.error("Install failed:", result.error);
-          else console.log("Installed.");
+          else if (!result.ok) {
+            console.error("Install failed:", result.error);
+            console.error(
+              "Hint: confirm the path points to a valid APK; for a downgrade/reinstall, uninstall the existing package first (`handheld shell 'pm uninstall <pkg>'`)."
+            );
+            process.exitCode = 1;
+          } else console.log("Installed.");
           return;
         }
         const api = new HandheldApiClient();

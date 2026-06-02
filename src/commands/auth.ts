@@ -361,12 +361,27 @@ async function prepareInitDevice(input: {
 export function registerAuthCommands(program: Command): void {
   const config = program
     .command("config")
-    .description("manage Handheld configuration");
+    .description("manage Handheld configuration (~/.handheld/config.json): api-key, api-url, default-device, output");
 
   config
     .command("set <key> <value>")
     .description(
-      "set a config value (api-key, api-url, default-device, output)"
+      "set a config value (keys: api-key, api-url, default-device, output)"
+    )
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld config set <key> <value>     # key: api-key | api-url | default-device | output
+
+Examples:
+  handheld config set api-key hk_live_...      # store a key instead of using the env var
+  handheld config set default-device prof_abc  # so bare \`connect\`/\`run\` target this device
+  handheld config set output json              # default every command to JSON
+
+Caveats:
+  - Values are written to ~/.handheld/config.json. The api-key is masked when printed back by \`config get\`.
+  - Setting api-key here is the non-interactive alternative to \`handheld login\`.`
     )
     .action((key: string, value: string) => {
       const keyMap: Record<string, string> = {
@@ -389,7 +404,20 @@ export function registerAuthCommands(program: Command): void {
 
   config
     .command("get [key]")
-    .description("show config values")
+    .description("show config values (all keys, or one; api-key is masked)")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld config get [key]     # omit key to dump all (api-key masked)
+
+Examples:
+  handheld config get                  # show every configured value
+  handheld config get default-device   # print just the default device id
+
+Caveats:
+  - "Not set: <key>" means the value is absent — set it with \`handheld config set <key> <value>\` or sign in with \`handheld login\`.`
+    )
     .action((key?: string) => {
       const cfg = getConfig();
       if (key) {
@@ -401,7 +429,10 @@ export function registerAuthCommands(program: Command): void {
         };
         const val = cfg[keyMap[key] as keyof typeof cfg];
         if (val) console.log(val);
-        else console.error(`Not set: ${key}`);
+        else {
+          console.error(`Not set: ${key}`);
+          console.error("Hint: set it with `handheld config set " + key + " <value>` (or run `handheld login` to populate api-key/api-url).");
+        }
       } else {
         // Show all (mask API key)
         const display = { ...cfg };
@@ -414,13 +445,29 @@ export function registerAuthCommands(program: Command): void {
 
   program
     .command("login")
-    .description("sign in through the browser and store an org API key")
+    .description("sign in via browser device-code and store an org API key (--manual to paste a key; --no-open for headless)")
     .option(
       "--api-url <url>",
       `API URL (overrides HANDHELD_API_URL env and config; default ${DEFAULT_API_URL})`
     )
     .option("--manual", "paste an API key instead of using browser login")
     .option("--no-open", "print the login URL without opening a browser")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld login [--api-url <url>] [--manual] [--no-open]
+
+Examples:
+  handheld login                       # browser device-code flow, stores the key in ~/.handheld/config.json
+  handheld login --no-open             # headless/SSH: print the URL + code to open elsewhere
+  handheld login --manual              # paste an existing API key + URL instead
+
+Caveats:
+  - Browser flow polls until you approve; it times out (~10m) or errors if the code expires — just re-run.
+  - CI/agents can skip this entirely: set HANDHELD_API_KEY (or \`handheld config set api-key ...\`) and the cloud commands work headlessly.
+  - Not needed for \`handheld connect --local\` — local adb devices require no key.`
+    )
     .action(
       async (opts: { apiUrl?: string; manual?: boolean; open?: boolean }) => {
         try {
@@ -436,6 +483,7 @@ export function registerAuthCommands(program: Command): void {
           });
         } catch (err) {
           console.error("Login failed:", (err as Error).message);
+          console.error("Hint: re-run `handheld login` (codes expire). On a headless host use `handheld login --no-open`, or skip login by setting HANDHELD_API_KEY.");
           process.exit(1);
         }
       }
@@ -444,7 +492,7 @@ export function registerAuthCommands(program: Command): void {
   program
     .command("init")
     .alias("i")
-    .description("sign in and prepare a trial cloud phone")
+    .description("one-shot bringup: sign in (or reuse a key), claim a trial cloud phone, and connect it")
     .option(
       "--api-url <url>",
       `API URL (overrides HANDHELD_API_URL env and config; default ${DEFAULT_API_URL})`
@@ -457,6 +505,24 @@ export function registerAuthCommands(program: Command): void {
       "--session-ttl <hours>",
       "relay session lifetime in hours for this device (default 1; capped server-side)",
       parseFloat
+    )
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld init [--api-url <url>] [--no-device] [--no-connect] [--no-open] [--with-adb] [--session-ttl <hours>]
+
+Examples:
+  handheld init                              # browser sign-in, claim a trial phone, connect it
+  HANDHELD_API_KEY=hk_... handheld init      # CI/agent path: no browser, provisions directly with the key
+  handheld init --with-adb                   # also bring up the ADB transport, not just relay
+  handheld init --no-device                  # just sign in and store the key
+
+Caveats:
+  - With a key already present (HANDHELD_API_KEY env or saved config) it skips the browser entirely — the headless path.
+  - Without a key it opens a browser device-code flow; use --no-open on a headless host.
+  - Claims a TRIAL cloud phone and sets it as default-device, so later bare \`connect\`/\`run\` target it.
+  - For a LOCAL adb device you don't need init at all — just \`handheld connect --local\`.`
     )
     .action(
       async (opts: {
@@ -582,6 +648,7 @@ export function registerAuthCommands(program: Command): void {
           }
         } catch (err) {
           console.error("Init failed:", (err as Error).message);
+          console.error("Hint: check auth (`handheld login` or HANDHELD_API_KEY) and balance (`handheld billing`); retry — trial pool hardware can be momentarily unavailable.");
           process.exit(1);
         }
       }
@@ -589,7 +656,7 @@ export function registerAuthCommands(program: Command): void {
 
   program
     .command("create")
-    .description("prepare a new trial cloud phone using the configured API key")
+    .description("claim + start a new trial cloud phone with the configured API key (no browser sign-in)")
     .option(
       "--api-url <url>",
       `API URL (overrides HANDHELD_API_URL env and config; default ${DEFAULT_API_URL})`
@@ -597,6 +664,22 @@ export function registerAuthCommands(program: Command): void {
     .option("--display-name <name>", "device display name", "Trial phone")
     .option("--no-connect", "do not connect transports after the device starts")
     .option("--with-adb", "also request provider ADB during create/connect")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld create [--api-url <url>] [--display-name <name>] [--no-connect] [--with-adb]
+
+Examples:
+  handheld create                              # claim + start + connect a trial phone
+  handheld create --display-name "qa-bot"      # give it a name in the dashboard
+  handheld create --no-connect                 # provision only; connect later with \`handheld connect <id>\`
+
+Caveats:
+  - Needs an API key already configured (HANDHELD_API_KEY or \`handheld login\`); unlike \`init\` it never opens a browser.
+  - \`init\` is the interactive sibling (it can sign you in first); \`create\` is the headless provisioner.
+  - Sets the new phone as default-device and connects relay by default (--with-adb adds the ADB transport).`
+    )
     .action(
       async (opts: {
         apiUrl?: string;
@@ -669,6 +752,7 @@ export function registerAuthCommands(program: Command): void {
           console.log("Ready: handheld tap, handheld swipe, handheld snap, and handheld shell can use this device.");
         } catch (err) {
           console.error("Create failed:", (err as Error).message);
+          console.error("Hint: confirm an API key is set (`handheld config get api-key` or HANDHELD_API_KEY) and you have balance (`handheld billing`); retry if pool hardware was busy.");
           process.exit(1);
         }
       }

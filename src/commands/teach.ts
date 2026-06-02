@@ -192,7 +192,10 @@ export async function runTeach(
     env = { ...env, status: "error", message: "No device. Pass --device or set a default; teach needs a cloud device with a live viewer." };
     writeEnvelope(envelopePath, env);
     if (json) console.log(JSON.stringify(env));
-    else console.error(env.message);
+    else {
+      console.error(env.message);
+      console.error("Hint: claim one with `handheld init`, or pass `--device <id>` (see `handheld devices`).");
+    }
     return env;
   }
   try {
@@ -209,14 +212,20 @@ export async function runTeach(
       env = { ...env, status: "error", message: "This device has no live viewer (local/relay-less). Teach needs a cloud device with a relay live view." };
       writeEnvelope(envelopePath, env);
       if (json) console.log(JSON.stringify(env));
-      else console.error(env.message);
+      else {
+        console.error(env.message);
+        console.error("Hint: target a cloud phone instead (`handheld devices`, then `--device <id>`); local adb devices can't be taught (no relay viewer).");
+      }
       return env;
     }
   } catch (err) {
     env = { ...env, status: "error", message: `connect failed: ${(err as Error).message}` };
     writeEnvelope(envelopePath, env);
     if (json) console.log(JSON.stringify(env));
-    else console.error(env.message);
+    else {
+      console.error(env.message);
+      console.error("Hint: check auth (`handheld login` / HANDHELD_API_KEY) and that the device is up (`handheld devices`); then retry.");
+    }
     return env;
   }
 
@@ -325,7 +334,7 @@ export function registerTeachCommand(program: Command): void {
   program
     .command("teach <objective...>")
     .description(
-      "open the live viewer for a human to demonstrate a task, then capture the trajectory bundle (the 'envelope') for the teach-from-human skill"
+      "open the cloud device's live viewer for a human to demonstrate a task, then capture the trajectory bundle for the teach-from-human skill"
     )
     .option("--device <id>", "target cloud device (falls back to default-device)")
     .option("--package <pkg>", "app the workflow is keyed to (optional hint)")
@@ -333,10 +342,28 @@ export function registerTeachCommand(program: Command): void {
     .option("--timeout <sec>", "max seconds to wait for the demonstration bundle", parseFloat)
     .option("--downloads <dir>", "directory to watch for the downloaded mu-trajectory zip (default ~/Downloads)")
     .option("--teach-id <id>", "use a pre-assigned teach id (internal; for the detached/agent path)")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld teach <objective...> [--device <id>] [--package <pkg>] [--timeout <sec>] [--downloads <dir>] [--no-open]
+
+Examples:
+  handheld teach "Log in to the banking app and reach the dashboard"
+  handheld teach "Complete checkout" --package com.shop.app --timeout 1200
+  handheld teach "Pair the watch" --no-open      # watch ~/Downloads without popping a browser
+
+Caveats:
+  - Needs a CLOUD device with a live viewer (relay) — pass --device or set a default; LOCAL/relay-less devices have no viewer and will error.
+  - Needs an API key for the connect step (\`handheld login\` / HANDHELD_API_KEY).
+  - In the viewer the human records + stops; this watches the downloads dir for the mu-trajectory zip, then writes a ready 'envelope.json'.
+  - Times out (default 1800s) if no bundle appears — confirm the viewer downloaded the zip into --downloads (default ~/Downloads).`
+    )
     .action(async (objectiveParts: string[], opts: TeachOptions) => {
       const objective = objectiveParts.join(" ").trim();
       if (!objective) {
         console.error("Usage: handheld teach <objective...>");
+        console.error('Hint: pass the task to demonstrate as text, e.g. handheld teach "Log in and open the dashboard".');
         process.exit(1);
       }
       const env = await runTeach(objective, { ...opts, json: program.opts().json }, program.opts().device);

@@ -143,7 +143,20 @@ function logConnectFailure(error: unknown, json: boolean): void {
   }
 
   const msg = error instanceof Error ? error.message : JSON.stringify(error);
+  if (json) {
+    console.error(JSON.stringify({ ok: false, error: { message: msg } }, null, 2));
+    return;
+  }
   console.error("Connect failed:", msg);
+  // Point at the recovery that matches the failure shape an agent is likely
+  // hitting: auth for cloud, adb/Tiny for local, devices for a bad id.
+  if (/api key|unauthor|401|403|sign in|log ?in/i.test(msg)) {
+    console.error("Hint: authenticate first — `handheld login` (or set HANDHELD_API_KEY). Local devices need no key: `handheld connect --local`.");
+  } else if (/adb|emulator|usb|device state|not found/i.test(msg)) {
+    console.error("Hint: check `adb devices` — start an emulator or authorize USB debugging, then pass the serial: `handheld connect --local <serial>`.");
+  } else {
+    console.error("Hint: run `handheld devices` to confirm the device id, or `handheld status` to inspect existing connections.");
+  }
 }
 
 function isLocalDevApiUrl(url: string): boolean {
@@ -771,7 +784,9 @@ function printLocalConnectResult(result: ConnectLocalResult, json: boolean): voi
 export function registerConnectCommand(program: Command): void {
   program
     .command("connect [deviceId]")
-    .description("connect to a cloud phone (relay + ADB dual transport)")
+    .description(
+      "connect a device: cloud phone (relay + ADB dual transport, needs API key) or --local [serial] adb device (no key)"
+    )
     .option("--headed", "open a browser window with the remote device viewer")
     .option(
       "--local",
@@ -788,6 +803,26 @@ export function registerConnectCommand(program: Command): void {
       "--session-ttl <hours>",
       "relay session lifetime in hours for this device (default 1; capped server-side)",
       parseFloat
+    )
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld connect <deviceId> [--headed] [--adb-only] [--with-adb] [--no-tiny] [--session-ttl <hours>]
+  handheld connect --local [serial] [--no-tiny]
+
+Examples:
+  handheld connect --local                       # attach the one ready adb device/emulator (no API key)
+  handheld connect --local emulator-5554         # name the serial (see: adb devices)
+  handheld connect prof_abc123                   # cloud phone: start/reuse a session, relay + ADB
+  handheld connect prof_abc123 --headed          # cloud phone + open the live viewer in a browser
+
+Caveats:
+  - Cloud connect <deviceId> needs an API key — run \`handheld login\` (or set HANDHELD_API_KEY) first.
+  - \`--local [serial]\` needs \`adb\` on PATH and a device in 'device' state (see: adb devices); it never calls the Gateway.
+  - Both paths bootstrap the on-device Tiny helper for snapshots/input; pass --no-tiny to skip it.
+  - With several adb devices attached, \`--local\` requires an explicit [serial]; with one it auto-picks.
+  - Tear down with \`handheld disconnect\` (local: drops the forward; cloud: also stops the Gateway session).`
     )
     .action(
       async (
@@ -823,6 +858,9 @@ export function registerConnectCommand(program: Command): void {
         if (!resolvedDevice) {
           console.error(
             "No device specified. Pass a device ID or set default: handheld config set default-device <id>"
+          );
+          console.error(
+            "Hint: run `handheld devices` to list cloud phones, or `handheld connect --local` to attach a local adb device with no key."
           );
           process.exit(1);
         }

@@ -16,7 +16,9 @@ import { parseSettleMs } from "./action-wait.js";
 
 const program = new Command()
   .name("handheld")
-  .description("CLI for Handheld cloud phone control")
+  .description(
+    "Android device control for agents — drive a cloud phone or a local adb device with the snap -> act -> verify loop"
+  )
   .version("0.1.0")
   .option("--device <id>", "target device ID (or set HANDHELD_DEVICE env)")
   .option("--json", "output as JSON")

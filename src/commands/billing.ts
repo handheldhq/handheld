@@ -12,7 +12,26 @@ const BILLING_SUMMARY_TIMEOUT_MS = 10_000;
 export function registerBillingCommand(program: Command): void {
   const billing = program
     .command("billing", { hidden: true })
-    .description("show wallet balance, free-tier usage, and spend")
+    .description("show wallet balance, free-tier usage, and spend (bare = summary; subcommands: balance, transactions, spend)")
+    .addHelpText(
+      "after",
+      `
+Arg grammar:
+  handheld billing [--json]                       # default: summary (balance + free minutes + cycle spend)
+  handheld billing balance
+  handheld billing transactions [--limit <n>]
+  handheld billing spend [--window-start-ms <ms>] [--window-end-ms <ms>]
+
+Examples:
+  handheld billing                       # one-line wallet + free-tier + spend overview
+  handheld billing transactions --limit 50
+  handheld billing spend --window-start-ms 1717200000000
+
+Caveats:
+  - All subcommands hit the Gateway and need an API key (\`handheld login\` / HANDHELD_API_KEY).
+  - Window timestamps are epoch MILLISECONDS (non-negative integers); --limit must be a positive integer.
+  - This is account-level billing, not per-device — it is not scoped by --device.`
+    )
     .action(async () => {
       await showBillingSummary(program);
     });
@@ -48,7 +67,7 @@ export function registerBillingCommand(program: Command): void {
 
   billing
     .command("transactions")
-    .description("list recent wallet transactions")
+    .description("list recent wallet transactions (--limit <n>, default 20)")
     .option("--limit <n>", "number of transactions to return", parsePositiveInteger, 20)
     .action(async (opts: { limit: number }) => {
       const json = program.opts<JsonOption>().json;
@@ -67,7 +86,7 @@ export function registerBillingCommand(program: Command): void {
 
   billing
     .command("spend")
-    .description("show wallet spend summary")
+    .description("show wallet spend summary (optional --window-start-ms/--window-end-ms in epoch ms)")
     .option("--window-start-ms <ms>", "spend window start time in epoch milliseconds", parseMillis)
     .option("--window-end-ms <ms>", "spend window end time in epoch milliseconds", parseMillis)
     .action(
@@ -226,5 +245,6 @@ function parsePositiveInteger(value: string): number {
 
 function fail(err: unknown): never {
   console.error("Error:", err instanceof Error ? err.message : String(err));
+  console.error("Hint: billing needs an API key — run `handheld login` (or set HANDHELD_API_KEY), then retry.");
   process.exit(1);
 }
