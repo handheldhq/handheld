@@ -58,6 +58,7 @@ import type { TinyReader } from "../action-wait.js";
 import { hasFocusedEditableField, typeViaTinySetText } from "../text-entry.js";
 import {
   formatSnapshot,
+  clearLastSnapshot,
   loadLastSnapshot,
   normalizeTinySnapshot,
   saveLastSnapshot,
@@ -69,6 +70,7 @@ import {
   amStartError,
   clearFocusedInputCommand,
   currentAppCommand,
+  isSelectorTarget,
   isSnapshotTarget,
   launchTargetCommand,
   launcherActivitiesCommand,
@@ -97,6 +99,7 @@ type TransportResult = CommandResult | (ScreenshotResult & { error?: string });
 type SettledTransportResult = TransportResult & {
   snapshot?: SnapshotOutput;
   wait?: ActionWaitResult;
+  settleInconclusive?: boolean;
 };
 
 class RelayDaemonTransport implements Transport {
@@ -372,10 +375,18 @@ function outputResult(
     console.log(JSON.stringify(result));
   } else if (!result.ok) {
     console.error(`${failurePrefix}:`, result.error ?? "unknown error");
-  } else if (result.snapshot) {
-    // --post-state in text mode: render the settled snapshot like `snap` does.
-    // Nodes are already display-filtered, so format without re-filtering.
-    console.log(formatSnapshot(result.snapshot as unknown as SnapshotDocument, { header: true }));
+  } else {
+    // The gesture was sent but the screen never settled (still repainting). It is
+    // NOT a failure — say so, and nudge a re-snap instead of inviting a retry that
+    // would double-fire the action.
+    if (result.settleInconclusive) {
+      console.error("Action sent; settle inconclusive (screen still changing) — re-snap to verify.");
+    }
+    if (result.snapshot) {
+      // --post-state in text mode: render the settled snapshot like `snap` does.
+      // Nodes are already display-filtered, so format without re-filtering.
+      console.log(formatSnapshot(result.snapshot as unknown as SnapshotDocument, { header: true }));
+    }
   }
   if (!result.ok) {
     process.exitCode = 1;
@@ -431,7 +442,9 @@ function tapTargetFromArgs(input: {
     if (!center) {
       console.error(`Target "${input.target}" did not resolve to a tappable node.`);
       console.error(
-        "Hint: refs renumber on every screen change — re-run `handheld snap` and reread the refs, or use a durable id=/label=/text= selector (see `handheld guide selectors`)."
+        isSelectorTarget(input.target)
+          ? "Hint: no actionable node matched — it may have matched only read-only text (not a tap target) or nothing. Re-`snap` and target a node that shows a ref + `actions=[…]`."
+          : "Hint: refs renumber on every screen change — re-run `handheld snap` and reread the refs, or use a durable id=/label=/text= selector (see `handheld guide selectors`)."
       );
       process.exit(1);
     }
@@ -2042,6 +2055,10 @@ to switch apps reliably, then re-snap.`,
               ),
             `${name} failed`
           );
+          // These navigations change the screen but don't re-capture, so the
+          // cached @eN coordinates are now stale — drop the cache so a follow-up
+          // `tap @eN` fails safe ("run snap first") instead of tapping stale coords.
+          clearLastSnapshot(connection.deviceId);
         } finally {
           await disconnectRelay(relay);
         }

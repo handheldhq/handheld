@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { getConnection, getConnections, removeConnection } from "../state.js";
+import { getConfig, getConnection, getConnections, removeConnection, setConfig } from "../state.js";
 import { execAdb } from "../transport/adb/tunnel.js";
 import { HandheldApiClient } from "../api-client.js";
 
@@ -155,6 +155,10 @@ Caveats:
 export async function teardown(deviceId: string): Promise<void> {
   const conn = getConnection(deviceId);
   if (!conn) return;
+
+  // If this was the default device, clear it so bare commands afterward report a
+  // clean "Not connected." instead of resolving to a stale/removed connection.
+  if (getConfig().defaultDevice === deviceId) setConfig({ defaultDevice: undefined });
 
   if (conn.adb?.sshPid) {
     try {

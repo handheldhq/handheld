@@ -366,6 +366,24 @@ describe("Tiny snapshot formatting", () => {
     }
   });
 
+  it("culls zero-height / fold-straddling phantom nodes from the text view (M2)", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        nodes: [
+          { role: "android.widget.FrameLayout", depth: 0, bounds: { left: 0, top: 0, right: 1080, bottom: 2400 } },
+          { role: "android.widget.Button", text: "Real", hittable: true, depth: 1, bounds: { left: 0, top: 100, right: 200, bottom: 180 } },
+          // A fold-straddling RecyclerView row collapsed to a 0px-high line at the
+          // viewport edge — must not render as a title-less phantom button.
+          { role: "android.widget.Button", hittable: true, depth: 1, bounds: { left: 0, top: 2399, right: 1080, bottom: 2399 } },
+        ],
+      },
+    });
+    const text = formatSnapshot(snapshot, { header: false });
+    expect(text).toContain('"Real"');
+    expect(text).not.toMatch(/@e3\b/); // the zero-height button is culled
+  });
+
   it("groups other-window nodes under a labeled divider", () => {
     const snapshot = normalizeTinySnapshot({
       deviceId: "device-1",

@@ -36,6 +36,10 @@ export interface ServerSettleResult {
   error?: string;
   snapshot?: SnapshotOutput;
   wait?: ActionWaitResult;
+  // The gesture was sent but the settle response didn't arrive (timeout/abort on a
+  // continuously-repainting screen). The action is known-sent — reported as success
+  // so a retry loop doesn't double-fire it; the caller nudges the agent to re-snap.
+  settleInconclusive?: boolean;
 }
 
 // Transport for the input-with-settle request. Default is a direct HTTP fetch
@@ -79,8 +83,20 @@ export async function tryServerSettle(
     // Old helper (no /input route) or never reached the device — the gesture did
     // not execute, so the client path is a safe first attempt.
     if (/HTTP 404|not found/i.test(msg) || failedBeforeReachingDevice(msg)) return null;
-    // Ambiguous (timeout/abort after the body was sent): may have executed. Do
-    // NOT re-dispatch — surface an honest error instead (#5).
+    // Ambiguous: the gesture WAS sent, but the settle response timed out / was
+    // aborted (common on continuously-repainting screens — webviews, animations).
+    // Re-dispatching would double-fire (#5), and reporting failure makes a retry
+    // loop do exactly that. So report it as sent-but-unsettled (success) and nudge
+    // the agent to re-snap, rather than a false "failed".
+    const name = (err as { name?: string }).name;
+    if (name === "AbortError" || name === "TimeoutError" || /\babort|timed?\s?out|timeout/i.test(msg)) {
+      return {
+        ok: true,
+        settleInconclusive: true,
+        wait: { backend: "tiny", ok: false, reason: "settle-timeout", stable: false, waitedMs: 0 },
+      };
+    }
+    // A genuinely unexpected error (gesture state unknown): surface it honestly.
     return { ok: false, error: msg };
   }
   // inject rejected (bad args / 403 auth): gesture did not run; client path can

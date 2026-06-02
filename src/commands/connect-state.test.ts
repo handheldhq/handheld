@@ -26,6 +26,8 @@ describe("connect local state preservation", () => {
     const removeConnection = vi.fn();
 
     vi.doMock("../state.js", () => ({
+      setConfig: vi.fn(),
+      getConfig: vi.fn(() => ({})),
       getConnection: vi.fn(() => existing),
       getRelayState: vi.fn(() => existing.relay),
       removeConnection,
@@ -91,6 +93,8 @@ describe("connect local state preservation", () => {
       });
 
     vi.doMock("../state.js", () => ({
+      setConfig: vi.fn(),
+      getConfig: vi.fn(() => ({})),
       getConnection: vi.fn(() => undefined),
       getRelayState: vi.fn(),
       removeConnection: vi.fn(),
@@ -169,6 +173,8 @@ describe("connect local state preservation", () => {
       });
 
     vi.doMock("../state.js", () => ({
+      setConfig: vi.fn(),
+      getConfig: vi.fn(() => ({})),
       getConnection: vi.fn(() => undefined),
       getRelayState: vi.fn(),
       removeConnection: vi.fn(),

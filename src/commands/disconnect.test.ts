@@ -60,6 +60,8 @@ describe("disconnect teardown", () => {
     const removeConnection = vi.fn();
 
     vi.doMock("../state.js", () => ({
+      setConfig: vi.fn(),
+      getConfig: vi.fn(() => ({})),
       getConnection: vi.fn(() => connection),
       getConnections: vi.fn(() => [connection]),
       removeConnection,
@@ -99,6 +101,8 @@ describe("disconnect teardown", () => {
     };
 
     vi.doMock("../state.js", () => ({
+      setConfig: vi.fn(),
+      getConfig: vi.fn(() => ({})),
       getConnection: vi.fn(() => localConnection),
       getConnections: vi.fn(() => [localConnection]),
       removeConnection,
@@ -130,6 +134,8 @@ describe("disconnect teardown", () => {
     const removeConnection = vi.fn();
 
     vi.doMock("../state.js", () => ({
+      setConfig: vi.fn(),
+      getConfig: vi.fn(() => ({})),
       getConnection: vi.fn(() => connection),
       getConnections: vi.fn(() => [connection]),
       removeConnection,

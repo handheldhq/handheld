@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HANDHELD_HOME } from "./state.js";
 
@@ -455,6 +455,10 @@ function isOnScreen(
 ): boolean {
   const b = node.bounds;
   if (!b) return true;
+  // Zero/negative-area nodes (e.g. a fold-straddling list row that collapses to a
+  // 0px-high line at the viewport edge) have no tappable surface — treat as
+  // off-screen so they don't render as title-less, un-tappable phantom buttons.
+  if (b.bottom <= b.top || b.right <= b.left) return false;
   return b.bottom > 0 && b.top < viewport.height && b.right > 0 && b.left < viewport.width;
 }
 
@@ -686,6 +690,20 @@ export function loadLastSnapshot(deviceId: string): SnapshotDocument | null {
   const path = join(SNAPSHOT_DIR, `${deviceId}.json`);
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, "utf8")) as SnapshotDocument;
+}
+
+// Drop the cached snapshot after a navigation that changes the screen without
+// re-capturing (back/home/recent). The stored @eN coordinates no longer match the
+// live screen, so a follow-up `tap @eN` would blindly tap stale coordinates; with
+// the cache cleared it fails safe ("run snap first") instead.
+export function clearLastSnapshot(deviceId: string): void {
+  const path = join(SNAPSHOT_DIR, `${deviceId}.json`);
+  if (!existsSync(path)) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // best-effort — a stale cache is recreated by the next snap
+  }
 }
 
 export function resolveSnapshotRef(

@@ -7,6 +7,7 @@ import {
   getRelayState,
   removeConnection,
   saveConnection,
+  setConfig,
 } from "../state.js";
 import { getAuthorizationHeaders, getResolvedDevice } from "../auth.js";
 import { spawnTunnelDaemon } from "../transport/adb/daemon.js";
@@ -584,6 +585,8 @@ export async function connectDevice(
     tiny: tinyState,
     ...(opts.sessionTtlMs ? { sessionTtlMs: opts.sessionTtlMs } : {}),
   });
+  // Make the just-connected device the default so bare commands target it.
+  setConfig({ defaultDevice: resolvedDevice });
 
   if (opts.headed && relayState.viewerUrl) {
     openUrl(relayState.viewerUrl);
@@ -763,6 +766,9 @@ export async function connectLocalDevice(opts: {
     sessionId: "local",
     tiny,
   });
+  // Make the just-connected device the default so the documented bare loop
+  // (`connect → snap → …`, no --device) targets it instead of a stale default.
+  setConfig({ defaultDevice: serial });
 
   return { adb: { serial, tunnelPort }, deviceId: serial, tiny };
 }
