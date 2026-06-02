@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   amStartError,
   clearFocusedInputCommand,
+  isSelectorTarget,
+  isSnapshotTarget,
   launchTargetCommand,
   normalizeKeyInput,
   parseCurrentComponent,
@@ -15,6 +17,21 @@ import {
 } from "./device-actions.js";
 
 describe("agent device action helpers", () => {
+  it("recognizes refs, bare indices, and durable selectors as snapshot targets", () => {
+    // index-based refs
+    expect(isSnapshotTarget("@e7")).toBe(true);
+    expect(isSnapshotTarget("7")).toBe(true);
+    // durable selectors
+    for (const sel of ['id=search_box', 'label="Network & internet"', "text=Search", "ID = foo"]) {
+      expect(isSelectorTarget(sel)).toBe(true);
+      expect(isSnapshotTarget(sel)).toBe(true);
+    }
+    // coordinates / plain text are not snapshot targets
+    expect(isSnapshotTarget("540")).toBe(true); // bare index, still a ref
+    expect(isSelectorTarget("540")).toBe(false);
+    expect(isSelectorTarget("hello world")).toBe(false);
+  });
+
   it("normalizes key names and raw keycodes", () => {
     expect(normalizeKeyInput("recent_apps")).toBe(187);
     expect(normalizeKeyInput("KEYCODE_TAB")).toBe(61);

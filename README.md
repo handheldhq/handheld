@@ -86,6 +86,8 @@ handheld snap -i                        # compact view: actionable refs (@e1, ..
 handheld snap -i --screenshot           # refs plus a PNG screenshot file
 handheld tap 540 960                    # tap at coordinates
 handheld tap @e2                        # tap cached snapshot ref
+handheld tap 'id=search_action_bar'     # durable selector: tap by resource-id
+handheld tap 'label=Network & internet' # tap by visible name (id=/label=/text= also work on type/fill/long_press/…)
 handheld long_press @e2                 # long press cached snapshot ref
 handheld long_press 540 960             # long press at coordinates
 handheld double_tap @e2                 # double tap a ref
@@ -150,7 +152,13 @@ Line grammar:
   (the keys are rarely tap targets — use `type`; pass `--all` to expand them).
 
 Refs are invalidated by anything that changes the screen — re-`snap` after a
-tap, scroll, navigation, or async update before using refs again.
+tap, scroll, navigation, or async update before using refs again. The `id=` and
+`"title"` shown on actionable nodes double as **durable selectors**: `tap
+id=search_action_bar`, `tap 'label=Network & internet'`, or `type 'label=Notes'
+"hi"` resolve against the last snapshot but survive the `@eN` renumbering that
+happens when the tree shuffles (`id=` matches the full or package-stripped
+resource-id; `label=`/`text=` match the name/value, case-insensitive; the
+actionable node wins when several match).
 
 Compatibility commands remain available for existing scripts:
 

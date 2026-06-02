@@ -1,5 +1,5 @@
-import { isSnapshotTarget, normalizeSnapshotTarget } from "./device-actions.js";
-import { loadLastSnapshot, resolveSnapshotRef } from "./snapshot.js";
+import { isSnapshotTarget, resolveTargetNode } from "./device-actions.js";
+import { loadLastSnapshot } from "./snapshot.js";
 import type { TinyState } from "./state.js";
 import { getTinySnapshot, tinySetText } from "./tiny-helper.js";
 
@@ -68,9 +68,7 @@ export async function typeViaTinySetText(input: {
   let stableId: string | undefined;
   if (input.target && isSnapshotTarget(input.target)) {
     const snapshot = loadLastSnapshot(input.deviceId);
-    const node = snapshot
-      ? resolveSnapshotRef(snapshot, normalizeSnapshotTarget(input.target))
-      : null;
+    const node = snapshot ? resolveTargetNode(snapshot, input.target) : null;
     if (!node?.stableId) return null;
     stableId = node.stableId;
   }

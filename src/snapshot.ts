@@ -688,6 +688,52 @@ export function resolveSnapshotRef(
   return snapshot.nodes.find((node) => node.ref === normalized) ?? null;
 }
 
+// Resolve a durable `id=…` / `label=…` / `text=…` selector against the cached
+// snapshot — a handle that survives re-renders, unlike index-based @eN refs (which
+// are reassigned every screen change). `id=` matches the resource-id (full, or the
+// package-stripped leaf we display — exact). `label=` matches the resolved title or
+// raw contentDescription; `text=` also matches the node's displayed value. Both are
+// case-insensitive. When several nodes match, the actionable one wins — so a row's
+// tappable Button is chosen over its consumed child text. Surrounding quotes optional.
+export function resolveSelector(
+  snapshot: SnapshotDocument,
+  selector: string
+): SnapshotNode | null {
+  const match = /^\s*(id|label|text)\s*=\s*(.+?)\s*$/i.exec(selector);
+  if (!match) return null;
+  const kind = match[1]!.toLowerCase();
+  let value = match[2]!;
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    value = value.slice(1, -1);
+  }
+  if (!value) return null;
+  const ieq = (candidate?: string): boolean =>
+    candidate !== undefined && candidate.toLowerCase() === value.toLowerCase();
+  const matches = (node: SnapshotNode): boolean => {
+    if (kind === "id") {
+      return node.identifier === value || idLeaf(node.identifier ?? "") === value;
+    }
+    if (kind === "label") {
+      return node.title === value || node.label === value || ieq(node.title) || ieq(node.label);
+    }
+    return (
+      node.value === value ||
+      node.title === value ||
+      node.label === value ||
+      ieq(node.value) ||
+      ieq(node.title) ||
+      ieq(node.label)
+    );
+  };
+  const hits = snapshot.nodes.filter(matches);
+  if (hits.length === 0) return null;
+  return hits.find((node) => node.hittable) ?? hits.find(isInteractiveNode) ?? hits[0]!;
+}
+
 export function nodeCenter(node: SnapshotNode): { x: number; y: number } | null {
   if (!node.bounds) return null;
   return {

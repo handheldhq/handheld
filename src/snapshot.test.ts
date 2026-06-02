@@ -3,6 +3,7 @@ import {
   formatSnapshot,
   nodeCenter,
   normalizeTinySnapshot,
+  resolveSelector,
   resolveSnapshotRef,
   snapshotForOutput,
   snapshotNodesForDisplay,
@@ -421,6 +422,37 @@ describe("Tiny snapshot formatting", () => {
     expect(formatSnapshot(snapshot, { header: false })).toContain(
       '@e1 Button "Network & internet" subtitle="Mobile, Wi‑Fi, hotspot" [actions=[press]]'
     );
+  });
+
+  it("resolves durable id=/label=/text= selectors, preferring the actionable node", () => {
+    const snapshot = normalizeTinySnapshot({
+      deviceId: "device-1",
+      raw: {
+        nodes: [
+          // Row button (no own label) with title + summary children.
+          { role: "android.widget.Button", hittable: true, depth: 0, bounds: { left: 0, top: 0, right: 1000, bottom: 100 } },
+          { role: "android.widget.TextView", resourceId: "android:id/title", text: "Network & internet", depth: 1, bounds: { left: 10, top: 10, right: 900, bottom: 45 } },
+          { role: "android.widget.TextView", resourceId: "android:id/summary", text: "Mobile, Wi‑Fi, hotspot", depth: 1, bounds: { left: 10, top: 50, right: 900, bottom: 90 } },
+          // Editable field with a package-qualified resource-id.
+          { role: "android.widget.EditText", editable: true, hittable: true, resourceId: "com.app:id/search_box", text: "Search", depth: 0, bounds: { left: 0, top: 200, right: 1000, bottom: 280 } },
+        ],
+      },
+    });
+
+    // id= matches the package-stripped leaf OR the full resource-id.
+    expect(resolveSelector(snapshot, "id=search_box")?.ref).toBe("@e4");
+    expect(resolveSelector(snapshot, "id=com.app:id/search_box")?.ref).toBe("@e4");
+    // label= resolves the tappable row (Button), not its consumed child text.
+    const byLabel = resolveSelector(snapshot, 'label="Network & internet"');
+    expect(byLabel?.ref).toBe("@e1");
+    expect(byLabel?.hittable).toBe(true);
+    // case-insensitive.
+    expect(resolveSelector(snapshot, "label=network & internet")?.ref).toBe("@e1");
+    // text= matches the node's displayed text.
+    expect(resolveSelector(snapshot, "text=Search")?.ref).toBe("@e4");
+    // misses + non-selectors.
+    expect(resolveSelector(snapshot, "id=nope")).toBeNull();
+    expect(resolveSelector(snapshot, "@e1")).toBeNull();
   });
 
   it("collapses an IME window to a one-line hint (expandable with --all)", () => {

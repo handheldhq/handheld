@@ -1,5 +1,5 @@
-import type { SnapshotDocument } from "./snapshot.js";
-import { nodeCenter, resolveSnapshotRef } from "./snapshot.js";
+import type { SnapshotDocument, SnapshotNode } from "./snapshot.js";
+import { nodeCenter, resolveSelector, resolveSnapshotRef } from "./snapshot.js";
 
 export type KeyInput = string | number;
 
@@ -70,8 +70,14 @@ export function clearFocusedInputCommand(repeat = 80): string {
   return `input keyevent 123; i=0; while [ "$i" -lt ${count} ]; do input keyevent 67; i=$((i+1)); done`;
 }
 
+// A durable `id=…` / `label=…` / `text=…` selector (resolved against the cached
+// snapshot), as opposed to an index-based @eN ref or raw coordinates.
+export function isSelectorTarget(value: string): boolean {
+  return /^\s*(id|label|text)\s*=/i.test(value);
+}
+
 export function isSnapshotTarget(value: string): boolean {
-  return /^@?e\d+$/.test(value) || /^\d+$/.test(value);
+  return /^@?e\d+$/.test(value) || /^\d+$/.test(value) || isSelectorTarget(value);
 }
 
 export function normalizeSnapshotTarget(value: string): string {
@@ -80,11 +86,22 @@ export function normalizeSnapshotTarget(value: string): string {
   return `@${value}`;
 }
 
+// Resolve a tap/type target to a node: a durable selector when it looks like one,
+// otherwise an index-based @eN ref against the cached snapshot.
+export function resolveTargetNode(
+  snapshot: SnapshotDocument,
+  target: string
+): SnapshotNode | null {
+  return isSelectorTarget(target)
+    ? resolveSelector(snapshot, target)
+    : resolveSnapshotRef(snapshot, normalizeSnapshotTarget(target));
+}
+
 export function pointFromSnapshotTarget(
   snapshot: SnapshotDocument,
   target: string
 ): { x: number; y: number } | null {
-  const node = resolveSnapshotRef(snapshot, normalizeSnapshotTarget(target));
+  const node = resolveTargetNode(snapshot, target);
   return node ? nodeCenter(node) : null;
 }
 

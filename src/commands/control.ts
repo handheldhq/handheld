@@ -419,7 +419,9 @@ function tapTargetFromArgs(input: {
     }
     const center = pointFromSnapshotTarget(snapshot, input.target);
     if (!center) {
-      console.error(`Snapshot ref ${input.target} is not tappable.`);
+      console.error(
+        `Target "${input.target}" did not resolve to a tappable node. Re-run \`handheld snap\` (refs change every screen), or use a durable id=/label= selector.`
+      );
       process.exit(1);
     }
     return center;
