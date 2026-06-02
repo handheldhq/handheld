@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { AGENT_SPACE_DIRNAME } from "./agent-space.js";
+export { AGENT_SPACE_DIRNAME } from "./agent-space.js";
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
-export const AGENT_SPACE_DIRNAME = "agent-space";
 export const LEGACY_AGENT_WORKSPACE_DIRNAME = "agent-workspace";
 
 export type HarnessAgentSpace = {
@@ -48,6 +49,9 @@ export function ensureHarnessAgentWorkspace(input: {
     overwrite: input.overwrite,
   });
   writePrivateFile(join(domainSkillsDir, "README.md"), renderDomainSkillsReadme(), {
+    overwrite: input.overwrite,
+  });
+  writePrivateFile(join(domainSkillsDir, "_template.md"), renderDomainSkillTemplate(), {
     overwrite: input.overwrite,
   });
   writePrivateFile(join(evidenceDir, "README.md"), renderEvidenceReadme(), {
@@ -97,8 +101,11 @@ export function createProjectHarnessWorkspace(input: {
             args: input.cliArgs ?? defaultMcpArgs(input.deviceId),
             command: input.cliCommand ?? process.execPath,
             env: {
+              HANDHELD_AGENT_SPACE: workspace.agentSpaceDir,
               HANDHELD_API_URL: input.apiUrl,
               HANDHELD_EVIDENCE_DIR: workspace.evidenceDir,
+              HANDHELD_PROJECT_AGENT_SPACE_DIR: workspace.agentSpaceDir,
+              HANDHELD_RUN_AGENT_SPACE_DIR: workspace.agentSpaceDir,
             },
           },
         },
@@ -163,6 +170,39 @@ Avoid secrets, run narration, and raw coordinates as primary instructions.
 `;
 }
 
+function renderDomainSkillTemplate(): string {
+  return [
+    "# <package>: <flow>",
+    "",
+    "Package: <android.package>",
+    "Activity checkpoint: <package>/<activity>",
+    "",
+    "## Fast Path",
+    "",
+    "1. snap and confirm the package/activity.",
+    "2. tap `label=<stable label>` or `id=<stable id>`.",
+    "3. verify the settled post-state by visible text or activity.",
+    "",
+    "## Selectors",
+    "",
+    "- Primary: `id=<resource-id>`",
+    "- Secondary: `label=<visible label>`",
+    "- Text: `text=<exact visible text>`",
+    "",
+    "## Traps",
+    "",
+    "- Re-snap after navigation; `@eN` refs are volatile.",
+    "- Coordinates only if no selector exists, with screen-size caveat.",
+    "",
+    "## Verification",
+    "",
+    "- Expected final package/activity:",
+    "- Expected visible text:",
+    "- Evidence to capture:",
+    "",
+  ].join("\n");
+}
+
 function renderEvidenceReadme(): string {
   return `# evidence
 
@@ -174,14 +214,24 @@ Do not store secrets or unredacted credentials.
 function renderAgentHelpersTemplate(): string {
   return `"""Editable Handheld harness helper shim.
 
-This file is loaded by handheld_harness.helpers when HH_AGENT_SPACE points at
-the agent-space directory. HH_AGENT_WORKSPACE remains a legacy fallback. It
+This file is loaded by handheld_harness.helpers when HANDHELD_AGENT_SPACE points
+at the agent-space directory. HH_AGENT_SPACE and HH_AGENT_WORKSPACE remain
+legacy fallbacks. It
 imports the handheld-harness helper namespace, then leaves space for
 task-specific wrappers. It is not a second runtime: helpers still
 delegate to the handheld CLI/MCP boundary.
 """
 
-from handheld_harness.helpers import *  # noqa: F401,F403
+try:
+    from handheld_harness.helpers import *  # noqa: F401,F403
+except ModuleNotFoundError as exc:
+    if exc.name != "handheld_harness":
+        raise
+    raise RuntimeError(
+        "handheld_harness is not installed. Install it with "
+        "python -m pip install handheld-harness, then re-run the helper script. "
+        "Cloud-loop agents can ignore this shim and use Handheld MCP tools directly."
+    ) from exc
 
 
 # Add task-specific helper wrappers below. Keep device actions delegated through

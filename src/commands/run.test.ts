@@ -52,8 +52,11 @@ describe("handheld run workspace", () => {
           args: ["handheld", "--device", "dev_123", "--mcp"],
           command: "node",
           env: {
+            HANDHELD_AGENT_SPACE: workspace.agentSpacePath,
             HANDHELD_API_URL: "https://api.test",
             HANDHELD_EVIDENCE_DIR: workspace.evidencePath,
+            HANDHELD_PROJECT_AGENT_SPACE_DIR: workspace.projectAgentSpacePath,
+            HANDHELD_RUN_AGENT_SPACE_DIR: workspace.agentSpacePath,
           },
         },
       },
@@ -74,7 +77,7 @@ describe("handheld run workspace", () => {
     expect(existsSync(workspace.evidencePath)).toBe(true);
   });
 
-  it("creates harness workspace helpers, interaction skills, and evidence docs", () => {
+  it("creates harness agent-space helpers, interaction skills, and evidence docs", () => {
     const root = tempRoot();
     const workspace = createRunWorkspace({
       apiUrl: "https://api.test",
@@ -92,6 +95,12 @@ describe("handheld run workspace", () => {
     );
     expect(readFileSync(join(agentSpace, "helpers", "agent_helpers.py"), "utf8")).toContain(
       "not a second runtime",
+    );
+    expect(readFileSync(join(agentSpace, "skills", "domain", "_template.md"), "utf8")).toContain(
+      "Activity checkpoint",
+    );
+    expect(readFileSync(workspace.importedDomainSkills.manifestPath, "utf8")).toContain(
+      "projectDomainSkillsDir",
     );
     expect(
       existsSync(join(agentSpace, "skills", "interaction", "mobile", "observe-and-act.md")),
@@ -134,11 +143,18 @@ describe("handheld run workspace", () => {
     const prepared = JSON.parse(logs.join("\n"));
     expect(prepared.ok).toBe(true);
     expect(prepared.workspace).toBe(workspaceDir);
+    expect(prepared.agentSpace).toBe(join(workspaceDir, "agent-space"));
     expect(prepared.evidence).toBe(join(workspaceDir, "agent-space", "evidence"));
     expect(prepared.connected).toBeNull();
+    expect(prepared.args).toContain(
+      `mcp_servers.handheld.env.HANDHELD_AGENT_SPACE="${workspaceDir}/agent-space"`,
+    );
     expect(prepared.args).toContain('mcp_servers.handheld.env.HANDHELD_API_URL=""');
     expect(prepared.args).toContain(
       `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR="${workspaceDir}/agent-space/evidence"`,
+    );
+    expect(prepared.args).toContain(
+      `mcp_servers.handheld.env.HANDHELD_RUN_AGENT_SPACE_DIR="${workspaceDir}/agent-space"`,
     );
     expect(
       prepared.args.find((arg: string) => arg.startsWith("mcp_servers.handheld.args=")),
@@ -408,9 +424,15 @@ describe("Claude run plan", () => {
       "-c",
       'mcp_servers.handheld.args=["handheld", "--device", "dev_123", "--mcp"]',
       "-c",
+      `mcp_servers.handheld.env.HANDHELD_AGENT_SPACE="${workspace.agentSpacePath}"`,
+      "-c",
       'mcp_servers.handheld.env.HANDHELD_API_URL="https://api.test"',
       "-c",
       `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR="${workspace.evidencePath}"`,
+      "-c",
+      `mcp_servers.handheld.env.HANDHELD_PROJECT_AGENT_SPACE_DIR="${workspace.projectAgentSpacePath}"`,
+      "-c",
+      `mcp_servers.handheld.env.HANDHELD_RUN_AGENT_SPACE_DIR="${workspace.agentSpacePath}"`,
       "-m",
       "gpt-5",
       "-",
@@ -468,13 +490,19 @@ describe("Claude run plan", () => {
         ANTHROPIC_API_KEY: "secret",
         ANTHROPIC_AUTH_TOKEN: "token",
         CLAUDE_CODE_USE_BEDROCK: "1",
+        HANDHELD_API_KEY: "hk_env",
+        HANDHELD_RUN_AGENT_SPACE_DIR: "/tmp/run-agent-space",
         PATH: "/bin",
+        SECRET_TOKEN: "secret-token",
       },
       { agent: "claude" },
     );
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(env.SECRET_TOKEN).toBeUndefined();
+    expect(env.HANDHELD_API_KEY).toBe("hk_env");
+    expect(env.HANDHELD_RUN_AGENT_SPACE_DIR).toBe("/tmp/run-agent-space");
     expect(env.PATH).toBe("/bin");
 
     const kept = buildAgentEnv(

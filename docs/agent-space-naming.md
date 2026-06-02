@@ -24,4 +24,4 @@ agent-space/
 
 ## Compatibility
 
-`agent-workspace/` remains a legacy compatibility path only. Handheld cleanup removes it when present, and `handheld-harness` still accepts `HH_AGENT_WORKSPACE` for old callers. New docs, prompts, scaffolds, and defaults should use `agent-space/` and `HH_AGENT_SPACE`.
+`agent-workspace/` remains a legacy compatibility path only. Handheld cleanup removes it when present, and `handheld-harness` still accepts `HH_AGENT_WORKSPACE` for old callers. New docs, prompts, scaffolds, and defaults should use `agent-space/` and the product-prefix env names such as `HANDHELD_AGENT_SPACE`.

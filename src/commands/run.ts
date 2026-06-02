@@ -10,6 +10,7 @@ import {
 import { basename, join, resolve } from "node:path";
 import type { Command } from "commander";
 import { AuthError, getResolvedDevice, requireApiKey, requireApiUrl } from "../auth.js";
+import { agentSpaceDir as projectAgentSpaceDirForRoot, importProjectDomainSkills, type ImportedDomainSkills } from "../agent-space.js";
 import { ensureHarnessAgentWorkspace } from "../harness-workspace.js";
 import { connectDevice, connectLocalDevice } from "./connect.js";
 
@@ -46,13 +47,16 @@ type RunCommandOptions = {
 type WorkspaceTemplate = "default" | "harness";
 
 export type RunWorkspace = {
+  agentSpacePath: string;
   agentsPath: string;
   claudePath: string;
   evidencePath: string;
+  importedDomainSkills: ImportedDomainSkills;
   mcpConfigPath: string;
   mcpServer: HandheldMcpServerConfig;
   prompt: string;
   promptPath: string;
+  projectAgentSpacePath: string;
   runId: string;
   taskPath: string;
   workspaceDir: string;
@@ -66,6 +70,7 @@ export type RunWorkspaceInput = {
   deviceId: string;
   mcpDeviceId?: string | null;
   now?: Date;
+  projectRoot?: string;
   runsDir?: string;
   task: string;
   workspace?: string;
@@ -98,8 +103,11 @@ export type HandheldMcpServerConfig = {
   args: string[];
   command: string;
   env: {
+    HANDHELD_AGENT_SPACE: string;
     HANDHELD_API_URL: string;
     HANDHELD_EVIDENCE_DIR: string;
+    HANDHELD_PROJECT_AGENT_SPACE_DIR: string;
+    HANDHELD_RUN_AGENT_SPACE_DIR: string;
   };
 };
 
@@ -346,6 +354,8 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
     : buildRunId(input.task, input.now ?? new Date());
   const workspaceDir = resolve(input.workspace ?? join(input.runsDir ?? getProjectRunsDir(), runId));
   const agentSpaceDir = join(workspaceDir, "agent-space");
+  const projectRoot = resolve(input.projectRoot ?? process.cwd());
+  const projectAgentSpaceDir = projectAgentSpaceDirForRoot(projectRoot);
   const domainSkillsDir = join(agentSpaceDir, "skills", "domain");
   const evidenceDir = join(agentSpaceDir, "evidence");
   const logsDir = join(workspaceDir, "logs");
@@ -359,8 +369,11 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
     args: input.cliArgs ?? defaultMcpArgs(input.mcpDeviceId === undefined ? input.deviceId : input.mcpDeviceId),
     command: input.cliCommand ?? defaultMcpCommand(),
     env: {
+      HANDHELD_AGENT_SPACE: agentSpaceDir,
       HANDHELD_API_URL: input.apiUrl,
       HANDHELD_EVIDENCE_DIR: evidenceDir,
+      HANDHELD_PROJECT_AGENT_SPACE_DIR: projectAgentSpaceDir,
+      HANDHELD_RUN_AGENT_SPACE_DIR: agentSpaceDir,
     },
   };
   const mcpConfig = {
@@ -373,6 +386,7 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
     connectionMode: input.connectionMode ?? "cloud",
     deviceId: input.deviceId,
     mcpDeviceId: input.mcpDeviceId === undefined ? input.deviceId : input.mcpDeviceId,
+    projectAgentSpaceDir,
     task: input.task,
     workspaceDir,
   });
@@ -409,15 +423,22 @@ export function createRunWorkspace(input: RunWorkspaceInput): RunWorkspace {
       renderEvidenceReadme(),
     );
   }
+  const importedDomainSkills = importProjectDomainSkills({
+    projectAgentSpaceDir,
+    runAgentSpaceDir: agentSpaceDir,
+  });
 
   return {
+    agentSpacePath: agentSpaceDir,
     agentsPath,
     claudePath,
     evidencePath: evidenceDir,
+    importedDomainSkills,
     mcpConfigPath,
     mcpServer,
     prompt,
     promptPath,
+    projectAgentSpacePath: projectAgentSpaceDir,
     runId,
     taskPath,
     workspaceDir,
@@ -473,11 +494,10 @@ export function buildCodexRunPlan(input: AgentRunInput): AgentRunPlan {
     `mcp_servers.handheld.command=${tomlString(input.mcpServer.command)}`,
     "-c",
     `mcp_servers.handheld.args=${tomlStringArray(input.mcpServer.args)}`,
-    "-c",
-    `mcp_servers.handheld.env.HANDHELD_API_URL=${tomlString(input.apiUrl)}`,
-    "-c",
-    `mcp_servers.handheld.env.HANDHELD_EVIDENCE_DIR=${tomlString(input.mcpServer.env.HANDHELD_EVIDENCE_DIR)}`,
   ];
+  for (const [key, value] of Object.entries(input.mcpServer.env)) {
+    args.push("-c", `mcp_servers.handheld.env.${key}=${tomlString(value)}`);
+  }
   if (input.model?.trim()) {
     args.push("-m", input.model.trim());
   }
@@ -495,20 +515,76 @@ export function buildAgentEnv(
   source: NodeJS.ProcessEnv,
   opts: { agent: AgentRuntime; allowApiKeyEnv?: boolean },
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...source };
-  if (!opts.allowApiKeyEnv) {
-    if (opts.agent === "claude") {
-      delete env.ANTHROPIC_API_KEY;
-      delete env.ANTHROPIC_AUTH_TOKEN;
-      delete env.CLAUDE_CODE_USE_BEDROCK;
-      delete env.CLAUDE_CODE_USE_VERTEX;
-      delete env.CLAUDE_CODE_USE_FOUNDRY;
-    } else {
-      delete env.OPENAI_API_KEY;
-      delete env.CODEX_API_KEY;
-    }
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of BASE_AGENT_ENV_KEYS) copyEnvKey(source, env, key);
+  for (const key of HANDHELD_AGENT_ENV_KEYS) copyEnvKey(source, env, key);
+  if (opts.allowApiKeyEnv) {
+    const providerKeys = opts.agent === "claude"
+      ? CLAUDE_PROVIDER_ENV_KEYS
+      : CODEX_PROVIDER_ENV_KEYS;
+    for (const key of providerKeys) copyEnvKey(source, env, key);
   }
   return env;
+}
+
+const BASE_AGENT_ENV_KEYS = [
+  "APPDATA",
+  "COLORTERM",
+  "ComSpec",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LOCALAPPDATA",
+  "LOGNAME",
+  "PATH",
+  "PATHEXT",
+  "SHELL",
+  "SSH_AUTH_SOCK",
+  "SystemRoot",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "USER",
+  "USERPROFILE",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+];
+
+const HANDHELD_AGENT_ENV_KEYS = [
+  "HANDHELD_AGENT_SPACE",
+  "HANDHELD_API_KEY",
+  "HANDHELD_API_URL",
+  "HANDHELD_EVIDENCE_DIR",
+  "HANDHELD_PROJECT_AGENT_SPACE_DIR",
+  "HANDHELD_RUN_AGENT_SPACE_DIR",
+  "HH_AGENT_SPACE",
+  "HH_EVIDENCE_DIR",
+  "MOBILEUSE_API_KEY",
+];
+
+const CLAUDE_PROVIDER_ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+];
+
+const CODEX_PROVIDER_ENV_KEYS = [
+  "CODEX_API_KEY",
+  "OPENAI_API_KEY",
+];
+
+function copyEnvKey(
+  source: NodeJS.ProcessEnv,
+  target: NodeJS.ProcessEnv,
+  key: string,
+): void {
+  const value = source[key];
+  if (value !== undefined) target[key] = value;
 }
 
 function spawnAgentRun(
@@ -694,6 +770,9 @@ function emitRunPrepared(input: {
           args: input.plan.args,
           stdin: input.plan.stdin ? input.workspace.promptPath : null,
           workspace: input.workspace.workspaceDir,
+          agentSpace: input.workspace.agentSpacePath,
+          projectAgentSpace: input.workspace.projectAgentSpacePath,
+          importedDomainSkills: input.workspace.importedDomainSkills.imported,
           evidence: input.workspace.evidencePath,
           mcpConfig: input.workspace.mcpConfigPath,
           prompt: input.workspace.promptPath,
@@ -707,6 +786,8 @@ function emitRunPrepared(input: {
     return;
   }
   console.log(`Workspace: ${input.workspace.workspaceDir}`);
+  console.log(`Agent space: ${input.workspace.agentSpacePath}`);
+  console.log(`Project agent space: ${input.workspace.projectAgentSpacePath}`);
   console.log(`Evidence: ${input.workspace.evidencePath}`);
   console.log(`MCP config: ${input.workspace.mcpConfigPath}`);
   console.log(`Prompt: ${input.workspace.promptPath}`);
@@ -721,6 +802,7 @@ function renderPrompt(input: {
   connectionMode: "cloud" | "local";
   deviceId: string;
   mcpDeviceId?: string | null;
+  projectAgentSpaceDir: string;
   task: string;
   workspaceDir: string;
 }): string {
@@ -732,6 +814,7 @@ function renderPrompt(input: {
   return `You are a Handheld local agent running in an isolated workspace.
 
 Workspace: ${input.workspaceDir}
+Project agent space: ${input.projectAgentSpaceDir}
 Device: ${input.deviceId}
 
 Task:
@@ -744,7 +827,7 @@ Rules:
 - Keep actions small and verify visible state after meaningful actions.
 - Do not edit host files, run host shell commands, or use non-mobile tools.
 - Use capture_evidence for important checkpoints and before your final answer; initial and final CLI snapshots are also recorded automatically in the run evidence directory.
-- Keep durable app facts under agent-space/skills/domain if you discover reusable app behavior.
+- Project domain skills are imported into this run's agent-space/skills/domain. Keep new app facts run-local first, then use domain-skill MCP tools to promote durable facts back to the project agent-space.
 - If you get GENUINELY stuck on a device step (two distinct approaches tried and re-observed, a knowledge gap — not a transient), call teach_request to have a human demonstrate it; poll the returned envelope until status is "ready", then synthesize a reusable domain-skill from the trajectory (the teach-from-human skill). Reach for this last, not first.
 - Final answer: concise outcome plus the evidence you observed.
 `;
@@ -761,7 +844,8 @@ This workspace is intentionally isolated for one local agent run.
 - Tiny helper bootstrap starts in the background when the run connects.
 - capture_evidence writes durable snapshots/status/screenshots into agent-space/evidence/.
 - agent-space/ is the only place for run-local helper notes.
-- agent-space/skills/domain/ is for durable app facts: selectors, waits, traps, and verification checks.
+- agent-space/skills/domain/ starts with imported project app facts, then collects run-local discoveries.
+- Use list_domain_skills/read_domain_skill to inspect skills, save_domain_skill_candidate for run-local discoveries, and promote_domain_skill for durable project knowledge.
 `;
 }
 

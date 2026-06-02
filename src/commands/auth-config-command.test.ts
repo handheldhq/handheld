@@ -121,7 +121,7 @@ describe("config command secret display", () => {
     });
   });
 
-  it("scaffolds a project harness workspace during init", async () => {
+  it("scaffolds a project harness agent space during init", async () => {
     process.env.HANDHELD_API_KEY = "muk_env_bootstrap";
     const project = join(home, "project");
 
@@ -140,15 +140,66 @@ describe("config command secret display", () => {
     expect(existsSync(join(project, "agent-space", "helpers", "agent_helpers.py"))).toBe(true);
     expect(existsSync(join(project, "agent-space", "skills", "interaction", "mobile", "observe-and-act.md"))).toBe(true);
     expect(existsSync(join(project, "agent-space", "skills", "domain", "README.md"))).toBe(true);
+    expect(existsSync(join(project, "agent-space", "skills", "domain", "_template.md"))).toBe(true);
     expect(mcp.mcpServers.handheld.env).toEqual({
+      HANDHELD_AGENT_SPACE: join(project, "agent-space"),
       HANDHELD_API_URL: "https://api.test",
       HANDHELD_EVIDENCE_DIR: join(project, "agent-space", "evidence"),
+      HANDHELD_PROJECT_AGENT_SPACE_DIR: join(project, "agent-space"),
+      HANDHELD_RUN_AGENT_SPACE_DIR: join(project, "agent-space"),
     });
     expect(mcp.mcpServers.handheld.args).toContain("--mcp");
     expect(mcp.mcpServers.handheld.args).not.toContain("--device");
     expect(output).toContain(`Workspace: ${project}`);
     expect(output).toContain(`Agent space: ${join(project, "agent-space")}`);
     expect(output).toContain(`MCP config: ${mcpPath}`);
+  });
+
+  it("scaffolds a local init workflow without cloud auth", async () => {
+    const project = join(home, "local-project");
+
+    const output = await runAuth([
+      "init",
+      "--local",
+      "--no-connect",
+      "--workspace",
+      project,
+    ]);
+
+    const state = await import("../state.js");
+    const mcpPath = join(project, ".handheld", "mcp.json");
+    const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
+    expect(state.getConfig().apiKey).toBeUndefined();
+    expect(existsSync(join(project, ".handheld", "runs"))).toBe(true);
+    expect(existsSync(join(project, "agent-space", "helpers", "agent_helpers.py"))).toBe(true);
+    expect(mcp.mcpServers.handheld.env).toMatchObject({
+      HANDHELD_API_URL: "",
+      HANDHELD_EVIDENCE_DIR: join(project, "agent-space", "evidence"),
+      HANDHELD_PROJECT_AGENT_SPACE_DIR: join(project, "agent-space"),
+      HANDHELD_RUN_AGENT_SPACE_DIR: join(project, "agent-space"),
+    });
+    expect(mcp.mcpServers.handheld.args).toContain("--mcp");
+    expect(mcp.mcpServers.handheld.args).not.toContain("--device");
+    expect(output).toContain("Next: handheld connect --local");
+    expect(output).toContain(`Agent space: ${join(project, "agent-space")}`);
+  });
+
+  it("can scaffold local init MCP args for a known adb serial without connecting", async () => {
+    const project = join(home, "serial-project");
+
+    await runAuth([
+      "init",
+      "--local",
+      "--no-connect",
+      "--local-serial",
+      "emulator-5554",
+      "--workspace",
+      project,
+    ]);
+
+    const mcp = JSON.parse(readFileSync(join(project, ".handheld", "mcp.json"), "utf8"));
+    expect(mcp.mcpServers.handheld.args).toContain("--device");
+    expect(mcp.mcpServers.handheld.args).toContain("emulator-5554");
   });
 
   it("points missing cloud auth at env-first setup", async () => {

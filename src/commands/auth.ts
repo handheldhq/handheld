@@ -12,7 +12,7 @@ import {
 } from "../harness-workspace.js";
 import { getConfig, setConfig } from "../state.js";
 import { maskApiKey } from "../redact.js";
-import { connectDevice } from "./connect.js";
+import { connectDevice, connectLocalDevice } from "./connect.js";
 
 interface DeviceCodeResponse {
   deviceCode: string;
@@ -375,6 +375,108 @@ async function prepareInitDevice(input: {
   return deviceId;
 }
 
+type InitLocalWorkflowOptions = {
+  apiUrl?: string;
+  agentSpace?: boolean;
+  connect?: boolean;
+  device?: boolean;
+  harnessWorkspace?: boolean;
+  local?: boolean;
+  localSerial?: string;
+  workspace?: string;
+  workspaceTemplate?: string;
+};
+
+function resolveLocalInitApiUrl(raw?: string): string {
+  const explicit = raw?.trim();
+  const envUrl = process.env.HANDHELD_API_URL?.trim();
+  return (explicit || envUrl || "").replace(/\/$/, "");
+}
+
+async function initLocalWorkflow(
+  opts: InitLocalWorkflowOptions,
+  json: boolean,
+): Promise<void> {
+  const workspaceTemplate = (opts.workspaceTemplate ?? "harness").trim().toLowerCase();
+  if (workspaceTemplate !== "harness") {
+    throw new Error('unsupported workspace template "' + opts.workspaceTemplate + '". Supported templates: harness');
+  }
+
+  let connection: Awaited<ReturnType<typeof connectLocalDevice>> | null = null;
+  let deviceId: string | null = opts.localSerial ?? null;
+  if (opts.device !== false && opts.connect !== false) {
+    connection = await connectLocalDevice({
+      json,
+      serial: opts.localSerial,
+      startTiny: true,
+    });
+    deviceId = connection.deviceId;
+  }
+
+  let workspace: ProjectHarnessWorkspace | null = null;
+  if (opts.agentSpace !== false && opts.harnessWorkspace !== false) {
+    workspace = createProjectHarnessWorkspace({
+      apiUrl: resolveLocalInitApiUrl(opts.apiUrl),
+      deviceId,
+      rootDir: opts.workspace,
+    });
+  }
+
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          apiUrl: resolveLocalInitApiUrl(opts.apiUrl),
+          connected: connection
+            ? {
+                adb: connection.adb,
+                tiny: connection.tiny
+                  ? {
+                      baseUrl: connection.tiny.baseUrl,
+                      port: connection.tiny.port,
+                      status: connection.tiny.status,
+                    }
+                  : null,
+              }
+            : null,
+          connectionMode: "local",
+          defaultDevice: deviceId,
+          ok: true,
+          workspace: workspace
+            ? {
+                agentSpace: workspace.agentSpaceDir,
+                evidence: workspace.evidenceDir,
+                mcpConfig: workspace.mcpConfigPath,
+                root: workspace.rootDir,
+                runs: workspace.runsDir,
+              }
+            : null,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (connection) {
+    console.log(`Default local device: ${connection.deviceId}`);
+    if (connection.tiny) console.log(`Tiny: ${connection.tiny.baseUrl}`);
+    console.log("Ready: handheld snap, handheld tap, and handheld run --local can use this device.");
+  } else if (deviceId) {
+    console.log(`Local device: ${deviceId}`);
+    console.log("Next: handheld connect --local " + deviceId);
+  } else {
+    console.log("Next: handheld connect --local");
+  }
+  if (workspace) {
+    console.log(`Workspace: ${workspace.rootDir}`);
+    console.log(`Agent space: ${workspace.agentSpaceDir}`);
+    console.log(`MCP config: ${workspace.mcpConfigPath}`);
+    console.log('Next: handheld run "Open Settings and tell me what you see" --local --workspace-template harness');
+  }
+}
+
 export function registerAuthCommands(program: Command): void {
   const config = program
     .command("config")
@@ -520,9 +622,12 @@ Caveats:
     )
     .option("--no-device", "only sign in; do not create or select a device")
     .option("--no-connect", "do not connect transports after the device starts")
+    .option("--local", "initialize a local adb device/emulator workflow with no cloud auth")
+    .option("--local-serial <serial>", "local adb serial to use with --local")
     .option("--workspace <path>", "project directory to scaffold for agent phone work (default current directory)")
     .option("--workspace-template <name>", "agent space template to scaffold (harness)", "harness")
-    .option("--no-harness-workspace", "skip project-local harness workspace scaffolding")
+    .option("--no-agent-space", "skip project-local agent-space scaffolding")
+    .option("--no-harness-workspace", "legacy alias for --no-agent-space")
     .option("--no-open", "print the login URL without opening a browser")
     .option("--with-adb", "also request provider ADB during init/connect")
     .option(
@@ -534,11 +639,14 @@ Caveats:
       "after",
       `
 Arg grammar:
-  handheld init [--api-url <url>] [--workspace <path>] [--no-harness-workspace] [--no-device] [--no-connect] [--no-open] [--with-adb] [--session-ttl <hours>]
+  handheld init [--api-url <url>] [--workspace <path>] [--no-agent-space] [--no-device] [--no-connect] [--no-open] [--with-adb] [--session-ttl <hours>]
+  handheld init --local [--local-serial <serial>] [--workspace <path>] [--no-connect]
 
 Examples:
   handheld init                              # browser sign-in, claim/connect a phone, scaffold this project for agents
   HANDHELD_API_KEY=hk_... handheld init      # agent/CI path: no browser; stores the global key
+  handheld init --local                      # local adb/emulator setup; no browser, no API key
+  handheld init --local --no-connect          # scaffold agent-space only; no device touch
   handheld init --workspace ~/my-app          # scaffold a specific project directory
   handheld init --with-adb                   # also bring up the ADB transport, not just relay
   handheld init --no-device                  # sign in and scaffold workspace, but do not claim a phone
@@ -549,22 +657,32 @@ Caveats:
   - Without a key it opens a browser device-code flow; use --no-open on a headless host.
   - Claims a TRIAL cloud phone, sets it as default-device, connects it, and opens the live viewer when available.
   - Scaffolds a project-local harness agent space by default: .handheld/, agent-space/, helpers, skills, and evidence.
-  - For a LOCAL adb device you don't need init at all — just \`handheld connect --local\`.`
+  - For a LOCAL adb device, use \`handheld init --local\` for first-run agent-space setup or \`handheld connect --local\` for attach-only.`
     )
     .action(
       async (opts: {
         apiUrl?: string;
+        agentSpace?: boolean;
         connect?: boolean;
         device?: boolean;
         harnessWorkspace?: boolean;
+        local?: boolean;
+        localSerial?: string;
         open?: boolean;
-        withAdb?: boolean;
         sessionTtl?: number;
+        withAdb?: boolean;
         workspace?: string;
         workspaceTemplate?: string;
       }) => {
         const json = program.opts().json;
         try {
+          if (opts.localSerial && opts.local !== true) {
+            throw new Error("--local-serial requires --local");
+          }
+          if (opts.local === true) {
+            await initLocalWorkflow(opts, json);
+            return;
+          }
           // If a key is already available (env or saved config), skip browser
           // sign-in and provision directly. Env auth bootstraps the global
           // account key, so persist it once in ~/.handheld/config.json.
@@ -619,7 +737,7 @@ Caveats:
                 withAdb: opts.withAdb,
               });
             }
-            if (opts.harnessWorkspace !== false) {
+            if (opts.agentSpace !== false && opts.harnessWorkspace !== false) {
               const workspaceTemplate = (opts.workspaceTemplate ?? "harness").trim().toLowerCase();
               if (workspaceTemplate !== "harness") {
                 throw new Error('unsupported workspace template "' + opts.workspaceTemplate + '". Supported templates: harness');

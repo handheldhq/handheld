@@ -53,7 +53,8 @@ agent-space/
 ```
 
 Use `--workspace <path>` to scaffold a different project directory, or
-`--no-harness-workspace` for the old auth/device-only behavior.
+`--no-agent-space` for auth/device-only behavior (`--no-harness-workspace` is
+kept as a compatibility alias).
 See [`docs/agent-space-naming.md`](docs/agent-space-naming.md) for the naming rationale and legacy compatibility rules.
 
 ## Profiles And Sessions
@@ -84,6 +85,8 @@ cloud phone, no session, no API key required. Use it for local development,
 CI on an emulator, or driving a physical device you've plugged in.
 
 ```bash
+handheld init --local                    # first-run local setup: attach + scaffold agent-space, no auth
+handheld init --local --no-connect       # scaffold only; no device touch
 handheld connect --local                 # auto-pick the one ready adb device
 handheld connect --local emulator-5554   # or name the serial (`adb devices`)
 handheld connect --local --no-tiny       # skip the Tiny helper bootstrap
@@ -92,12 +95,15 @@ handheld tap @e7
 handheld disconnect                      # tears down locally; never calls the Gateway
 ```
 
-`connect --local` attaches over adb, bootstraps the Tiny helper on-device (the
+`init --local` is the local first-run path: it creates `.handheld/`,
+`agent-space/`, MCP config, helpers, skills, and evidence directories without
+cloud auth; when it connects successfully, it saves that adb serial as the
+default device. `connect --local` is the attach-only sibling: it attaches over adb, bootstraps the Tiny helper on-device (the
 same path the [handheld-harness](https://github.com/) uses — they share one
 Tiny instance via a fixed token), and saves a relay-less connection marked
 `local`. Every control/observation command (`snap`, `tap`, `type`, `swipe`,
 `shell`, `screenshot`, …) runs without an API key; a key is only needed for
-Gateway operations that provision or list **cloud** phones (`init`, `create`,
+Gateway operations that provision or list **cloud** phones (`init` without `--local`, `create`,
 `devices`, cloud `connect`). Requires `adb` on PATH.
 
 ## Device control
@@ -294,7 +300,11 @@ MCP server.
 Pass `--local` to target an adb device/emulator with no cloud API auth; add
 `--local-serial <serial>` when several local devices are attached. Pass
 `--workspace-template harness` or `--harness` to include a handheld-harness-shaped
-`agent-space` with mobile interaction skills and evidence directories.
+`agent-space` with mobile interaction skills and evidence directories. Project
+`agent-space/skills/domain` files are imported into each run; agents can inspect
+them with `list_domain_skills` / `read_domain_skill`, save run-local candidates
+with `save_domain_skill_candidate`, and promote durable discoveries back to the
+project with `promote_domain_skill`.
 
 ## Coming Soon
 
@@ -325,7 +335,7 @@ handheld --mcp --device <device-id>
 npx -y handheld --mcp
 ```
 
-Default agent tools: `devices`, `create_device`, `connect`, `disconnect`, `snap`, `tap`, `long_press`, `double_tap`, `swipe`, `type`, `list_apps`, `open_app`, `launch`, `copy`, `paste`, `press_key`, `back`, `home`, `recent`, `shell`, `teach_request`.
+Default agent tools: `devices`, `create_device`, `connect`, `disconnect`, `snap`, `capture_evidence`, `list_domain_skills`, `read_domain_skill`, `save_domain_skill_candidate`, `promote_domain_skill`, `tap`, `long_press`, `double_tap`, `swipe`, `type`, `list_apps`, `open_app`, `launch`, `copy`, `paste`, `press_key`, `back`, `home`, `recent`, `shell`, `teach_request`.
 
 Set `HANDHELD_MCP_FULL=1` to expose advanced fleet/profile/billing and compatibility tools for operators.
 
@@ -336,13 +346,15 @@ ADB/Tiny bootstrap path as the CLI.
 
 ## Config
 
-Stored in `~/.handheld/config.json`. Headless/agent auth should usually use
-`HANDHELD_API_KEY` for the current process; browser login and manual config
-remain supported for local profiles. Available keys:
+Stored in `~/.handheld/config.json`. `handheld init` with `HANDHELD_API_KEY`
+saves that account key as the global fallback key, similar to a normal CLI
+login. Headless/agent auth can still use `HANDHELD_API_KEY` for the current
+process; browser login and manual config remain supported for local profiles.
+Workspace/project config can take precedence later when present. Available keys:
 
 | Key | Description |
 |-----|-------------|
-| `api-key` | Optional stored API key; prefer `HANDHELD_API_KEY` for agents/CI |
+| `api-key` | Optional global account API key; `HANDHELD_API_KEY` overrides it for the current process |
 | `api-url` | Gateway API base URL |
 | `default-device` | Default profile/session alias for commands |
 | `output` | Default output format (`table`, `json`, `quiet`) |

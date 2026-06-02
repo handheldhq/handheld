@@ -1,7 +1,7 @@
 # handheld-harness Adapter Proof - 2026-06-02
 
 Scope: deterministic implementation proof for the new `oss/handheld-harness`
-adapter plus `handheld run` harness workspace support.
+adapter plus `handheld run` harness agent-space support.
 
 ## Deterministic Checks
 
@@ -23,7 +23,7 @@ adapter plus `handheld run` harness workspace support.
   - Result: `ok: handheld CLI reachable`.
 - Harness dry-run:
   - Command: `node dist/cli.js run "Inspect the current screen" --local --local-serial emulator-5554 --workspace-template harness --dry-run --agent codex --json`
-  - Result: prepared a workspace with `agent-workspace`, `evidence`, locked Handheld MCP config, and empty local `HANDHELD_API_URL`.
+  - Result: prepared a workspace with `agent-space`, `evidence`, locked Handheld MCP config, and empty local `HANDHELD_API_URL`.
 - Heredoc/fake-handheld smoke:
   - Command: `PYTHONPATH=src HH_FAKE_RECORD=/tmp/handheld-harness-heredoc-record.jsonl HANDHELD_BIN=/Users/hbruceweaver/Projects/lattice-technologies/oss/handheld-harness/tests/fixtures/fake_handheld.py python -m handheld_harness.run` with `state = snap()`.
   - Result: printed `.Settings` and recorded `["--json", "snap", "--agent"]`.

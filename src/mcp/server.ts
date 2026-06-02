@@ -37,6 +37,15 @@ import {
   connectDevice as connectCommandDevice,
   connectLocalDevice as connectLocalCommandDevice,
 } from "../commands/connect.js";
+import {
+  domainSkillsDir,
+  listDomainSkillFiles,
+  projectAgentSpaceDirFromEnv,
+  promoteRunDomainSkill,
+  readDomainSkill,
+  runAgentSpaceDirFromEnv,
+  writeRunDomainSkill,
+} from "../agent-space.js";
 import { startTeachDetached } from "../commands/teach.js";
 import {
   beginActionWait,
@@ -851,6 +860,49 @@ const TOOLS = [
     },
   },
   {
+    name: "list_domain_skills",
+    description: "List run-local and project domain-skill files in the agent-space.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "read_domain_skill",
+    description: "Read a domain-skill file from the run or project agent-space.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        path: { type: "string", description: "Relative skill path, e.g. com.android.settings.md" },
+        scope: { type: "string", enum: ["run", "project"], description: "Defaults to run." },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "save_domain_skill_candidate",
+    description: "Write a run-local domain-skill candidate for a reusable app workflow or selector map.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        body: { type: "string" },
+        packageName: { type: "string", description: "Used as filename when path is omitted." },
+        path: { type: "string", description: "Run-local relative path under skills/domain." },
+        title: { type: "string", description: "Fallback filename source when packageName/path are omitted." },
+      },
+      required: ["body"],
+    },
+  },
+  {
+    name: "promote_domain_skill",
+    description: "Promote a run-local domain-skill file back into the project agent-space.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        overwrite: { type: "boolean", description: "Replace an existing project skill with the same path." },
+        path: { type: "string", description: "Run-local relative skill path under skills/domain." },
+      },
+      required: ["path"],
+    },
+  },
+  {
     name: "shell",
     description: "Execute a shell command on the device",
     inputSchema: {
@@ -919,6 +971,10 @@ export const CORE_MCP_TOOL_NAMES = new Set([
   "disconnect",
   "snap",
   "capture_evidence",
+  "list_domain_skills",
+  "read_domain_skill",
+  "save_domain_skill_candidate",
+  "promote_domain_skill",
   "tap",
   "long_press",
   "double_tap",
@@ -957,6 +1013,8 @@ const READ_ONLY_MCP_TOOL_NAMES = new Set([
   "list_apps",
   "current_app",
   "screenshot",
+  "list_domain_skills",
+  "read_domain_skill",
 ]);
 
 const DESTRUCTIVE_MCP_TOOL_NAMES = new Set([
@@ -1958,6 +2016,41 @@ function mcpEvidenceRoot(): string {
   return resolve(configured || join(process.cwd(), "evidence"));
 }
 
+function mcpAgentSpaceRoots(): {
+  projectAgentSpaceDir: string;
+  runAgentSpaceDir: string;
+} {
+  return {
+    projectAgentSpaceDir: projectAgentSpaceDirFromEnv(),
+    runAgentSpaceDir: runAgentSpaceDirFromEnv(),
+  };
+}
+
+function mcpListDomainSkills(): Record<string, unknown> {
+  const roots = mcpAgentSpaceRoots();
+  const runDomainSkillsDir = domainSkillsDir(roots.runAgentSpaceDir);
+  const projectDomainSkillsDir = domainSkillsDir(roots.projectAgentSpaceDir);
+  return {
+    ok: true,
+    project: {
+      agentSpace: roots.projectAgentSpaceDir,
+      domainSkillsDir: projectDomainSkillsDir,
+      skills: listDomainSkillFiles(projectDomainSkillsDir).map((skill) => skill.path),
+    },
+    run: {
+      agentSpace: roots.runAgentSpaceDir,
+      domainSkillsDir: runDomainSkillsDir,
+      skills: listDomainSkillFiles(runDomainSkillsDir).map((skill) => skill.path),
+    },
+  };
+}
+
+function mcpDomainSkillScope(value: unknown): "project" | "run" {
+  if (value === undefined || value === null || value === "") return "run";
+  if (value === "run" || value === "project") return value;
+  throw new Error("scope must be run or project");
+}
+
 function mcpEvidenceSlug(value: string): string {
   return value
     .toLowerCase()
@@ -2408,6 +2501,49 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
               },
             ],
           };
+        }
+
+        case "list_domain_skills": {
+          return jsonContent(mcpListDomainSkills());
+        }
+
+        case "read_domain_skill": {
+          const roots = mcpAgentSpaceRoots();
+          return jsonContent(
+            readDomainSkill({
+              path: requiredString(args, "path"),
+              projectAgentSpaceDir: roots.projectAgentSpaceDir,
+              runAgentSpaceDir: roots.runAgentSpaceDir,
+              scope: mcpDomainSkillScope(args?.scope),
+            })
+          );
+        }
+
+        case "save_domain_skill_candidate": {
+          const roots = mcpAgentSpaceRoots();
+          return jsonContent({
+            ok: true,
+            skill: writeRunDomainSkill({
+              body: requiredString(args, "body"),
+              packageName: optionalString(args, "packageName"),
+              path: optionalString(args, "path"),
+              runAgentSpaceDir: roots.runAgentSpaceDir,
+              title: optionalString(args, "title"),
+            }),
+          });
+        }
+
+        case "promote_domain_skill": {
+          const roots = mcpAgentSpaceRoots();
+          return jsonContent({
+            ok: true,
+            skill: promoteRunDomainSkill({
+              overwrite: args?.overwrite === true,
+              path: requiredString(args, "path"),
+              projectAgentSpaceDir: roots.projectAgentSpaceDir,
+              runAgentSpaceDir: roots.runAgentSpaceDir,
+            }),
+          });
         }
       }
 
