@@ -134,7 +134,7 @@ handheld swipe 540 400 540 1200         # swipe gesture
 handheld type "hello world"             # set the focused field (replaces existing text)
 handheld type @e5 "hello world"         # set @e5 to the text
 handheld type @e5 "hello world" --append  # append instead of replacing
-handheld list-apps                      # launchable app packages (one id per line; --json → [{package,label}])
+handheld list-apps                      # launchable app packages (one id per line; --json → {ok, apps:[{package,label}]})
 handheld open-app settings              # open by package, alias (chrome/settings/gmail/maps/play/youtube/files), or package-like name
 handheld launch "https://example.com"   # deep link / intent
 handheld launch com.example/.Main       # explicit component
