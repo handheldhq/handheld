@@ -182,7 +182,7 @@ export function registerStatusCommand(program: Command): void {
         else {
           console.log("No active connections.");
           console.log("Hint: run handheld init to claim/connect a trial cloud phone and scaffold this project.");
-          console.log("Existing profiles can reconnect with handheld connect <device-id>; local adb is advanced dev/CI only.");
+          console.log("Existing cloud profiles reconnect with handheld connect <device-id>; for a local adb device/emulator use handheld connect --local [serial].");
         }
         return;
       }

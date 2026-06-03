@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- `status` (disconnected) hint now points local users at `handheld connect --local [serial]` instead of framing local adb as "advanced dev/CI only".
+- Docs: clarify `current-app` prints `package/activity` in text mode (the `{packageName, activity, component}` object is `--json`-only); note that a focused field's typed text may surface as its title (not the `= "value"` slot) and that an empty focused field is filtered from the compact snapshot.
+
 - `snap --offscreen`: when used, the footer now explains that off-screen list rows are recycled by Android (not in the tree) and points to `scroll` (more rows) and `--all` (folded structural containers) — `--offscreen` only un-culls in-tree below-fold nodes, which surprised agents expecting it to reveal a long list. Docs (README snapshot format) rewritten to set the right mental model: `--all` reveals the `shown/total` gap, `scroll` loads recycled rows.
 - Docs: document `snap --screenshot-output <file>` next to `--screenshot` (which otherwise writes `handheld-screenshot-<ts>.jpg` to CWD); add `current-app` to the main Device control list.
 

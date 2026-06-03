@@ -145,7 +145,7 @@ handheld back                           # Android back
 handheld home                           # Android home
 handheld recent                         # Android recent apps
 handheld shell "pm list packages"       # run shell command
-handheld current-app                     # print the foreground {packageName, activity, component}
+handheld current-app                     # text: prints "package/activity"; --json: {packageName, activity, component}
 ```
 
 ### Snapshot format
@@ -187,6 +187,11 @@ Line grammar:
 - **`subtitle="…"`** — the secondary line, from a `…:id/summary` child (else the
   second child text). Only on tappable rows.
 - **`= "value"`** — the node's current text (e.g. an editable field's contents).
+  Note: a focused search/text field often surfaces its typed text as the **title**
+  (`TextField "wifi"`) rather than in the `= "value"` slot — for such fields the
+  title *is* the current value. Also, an **empty** focused field is filtered out of
+  the compact snapshot (use `--all` to see it, or just `type` into it — the field
+  is still focused on-device even when not shown).
 - **`[ … ]`** — `id=` (resource-id, package prefix stripped), state flags
   (`focused`, `disabled`, `checked`/`unchecked`, `selected`), and **`actions=[…]`**
   = what you can do here: `press`, `long_press`, `set_value`, `toggle`, `scroll`.
@@ -248,7 +253,7 @@ Snapshots also carry the **foreground activity**: Tiny only reports the window's
 app (`appName`/`bundleId`, often "System UI"), so `snap`/`snap` fold in the
 `activity` + `component` (`package/activity`) from `dumpsys window`. The text
 header shows it (`Snapshot System UI [com.android.settings.Settings] (…)`), and
-`current-app` returns `{packageName, activity, component}`. (Post-action
+`current-app --json` returns `{packageName, activity, component}` (plain `current-app` prints the `package/activity` string). (Post-action
 `--post-state`/MCP snapshots don't include it — they're captured without a shell
 round-trip; call `current-app` if you need the activity after an action.)
 
