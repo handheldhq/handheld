@@ -846,6 +846,17 @@ export function formatSnapshot(
     }
   }
 
+  // `--offscreen` only un-culls nodes that are in the tree but below the viewport
+  // fold; it does NOT (and can't) reveal scrolled-away list rows, which Android
+  // recycles out of the accessibility tree entirely. Agents reach for it expecting
+  // the rest of a long list — so when it's used, say where the missing content
+  // actually lives: `scroll` (list rows) and `--all` (folded structural nodes).
+  if (options.offscreen && !options.all) {
+    lines.push(
+      "[--offscreen shows every in-tree node; off-screen list rows are recycled by Android and load only on `scroll` — use `--all` for folded structural containers]"
+    );
+  }
+
   if (!options.header) return lines.join("\n");
 
   // Foreground app package (from the resolved component) is the reliable "where

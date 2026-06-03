@@ -121,7 +121,8 @@ well as cloud); later commands are fast.
 ```bash
 handheld snap                           # compact view: actionable refs (@e1, ...) + readable text
 handheld snap -i                        # leaner: actionable refs only (drops read-only text)
-handheld snap --screenshot              # also save a JPEG screenshot file
+handheld snap --screenshot              # also save a JPEG (defaults to ./handheld-screenshot-<ts>.jpg in CWD)
+handheld snap --screenshot-output a.jpg # …or choose the path explicitly (recommended in scripts)
 handheld tap 540 960                    # tap at coordinates
 handheld tap @e2                        # tap cached snapshot ref
 handheld tap 'id=search_action_bar'     # durable selector: tap by resource-id
@@ -144,6 +145,7 @@ handheld back                           # Android back
 handheld home                           # Android home
 handheld recent                         # Android recent apps
 handheld shell "pm list packages"       # run shell command
+handheld current-app                     # print the foreground {packageName, activity, component}
 ```
 
 ### Snapshot format
@@ -151,11 +153,12 @@ handheld shell "pm list packages"       # run shell command
 `snap` prints a compact, agent-facing tree: structural containers are collapsed,
 off-screen nodes are dropped (with a scroll hint), and only the foreground
 window's nodes appear inline — other windows (status bar, nav bar, keyboard) are
-grouped or summarized below. Use `--all` for the full uncollapsed tree,
-`--offscreen` to keep below-the-fold nodes. `--json` returns the structured node
-list with the normalized fields (no per-node `raw` blob — that kept each node
-~1KB); pass `--raw` for the complete unprocessed Tiny response (every field, never
-culled).
+grouped or summarized below.
+
+- `--all` — the full uncollapsed tree (every structural container, nothing folded). The header's `(shown/total)` count puts those folded containers in `total`, so `--all` is what reveals the gap between `shown` and `total` — **not** `--offscreen`.
+- `--offscreen` — also keep nodes that are in the tree but below the viewport fold.
+- **Scrollable lists recycle their off-screen rows out of the accessibility tree**, so a row you haven't scrolled to simply isn't captured yet — neither `--all` nor `--offscreen` can show it. **`scroll` to load more rows** (the foreground `ScrollView` carries `actions=[scroll]`, and a `[N more below — scroll: …]` hint appears when below-fold rows *are* still in the tree). When you pass `--offscreen`, the footer reminds you of this.
+- `--json` returns the structured node list with the normalized fields (no per-node `raw` blob — that kept each node ~1KB); pass `--raw` for the complete unprocessed Tiny response (every field, never culled).
 
 ```
 Snapshot com.android.settings [com.android.settings.homepage.SettingsHomepageActivity] (18/116 nodes, backend=tiny)
