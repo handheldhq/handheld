@@ -12,10 +12,11 @@ vi.mock("./tiny-helper.js", async (importOriginal) => {
   };
 });
 
-// Hermetic: no real cached-snapshot file read for the pre-action digest.
+// Hermetic: no real cached-snapshot file read for the pre-action digest, and
+// no real cache write — capture saveLastSnapshot to assert what gets cached.
 vi.mock("./snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./snapshot.js")>();
-  return { ...actual, loadLastSnapshot: vi.fn(() => null) };
+  return { ...actual, loadLastSnapshot: vi.fn(() => null), saveLastSnapshot: vi.fn() };
 });
 
 import {
@@ -32,7 +33,7 @@ import {
   waitTinyChange,
   waitTinyStable,
 } from "./tiny-helper.js";
-import { loadLastSnapshot } from "./snapshot.js";
+import { loadLastSnapshot, saveLastSnapshot } from "./snapshot.js";
 import type { Connection } from "./state.js";
 
 const getTinyStatusMock = vi.mocked(getTinyStatus);
@@ -40,6 +41,7 @@ const getTinySnapshotMock = vi.mocked(getTinySnapshot);
 const waitTinyChangeMock = vi.mocked(waitTinyChange);
 const waitTinyStableMock = vi.mocked(waitTinyStable);
 const loadLastSnapshotMock = vi.mocked(loadLastSnapshot);
+const saveLastSnapshotMock = vi.mocked(saveLastSnapshot);
 
 function baseline(layoutDigest: string): void {
   loadLastSnapshotMock.mockReturnValue({ layoutDigest } as never);
@@ -67,6 +69,7 @@ beforeEach(() => {
   waitTinyStableMock.mockReset();
   loadLastSnapshotMock.mockReset();
   loadLastSnapshotMock.mockReturnValue(null);
+  saveLastSnapshotMock.mockReset();
   getTinyStatusMock.mockResolvedValue({ eventSeq: 5 });
 });
 
@@ -202,6 +205,36 @@ describe("post-action settle waits", () => {
       previousDigest: "PRE",
       requireDigestChange: true,
     });
+  });
+
+  // Re-audit fix: --post-state must cache the SETTLED snapshot. The settle can
+  // declare "stable" during a brief lull while a screen is still rendering async
+  // content (storage sizes, search results), so a single capture here can store a
+  // transient layoutDigest that no longer matches the screen by the next command
+  // — which then fail-closes the printed refs as stale. capturePostStateSnapshot
+  // must confirm the layout stopped moving before caching what it prints.
+  it("post-state caches the settled snapshot, not a transient pre-settle digest", async () => {
+    baseline("PRE");
+    waitTinyChangeMock.mockResolvedValue({ changed: true });
+    waitTinyStableMock.mockResolvedValue({ stable: true, reason: "samples", layoutDigest: "POST" });
+    const node = {
+      role: "button",
+      text: "Navigate up",
+      bounds: { left: 0, top: 0, right: 10, bottom: 10 },
+      hittable: true,
+    };
+    // First post-state read is mid-render (TRANSIENT); the screen then settles.
+    getTinySnapshotMock
+      .mockResolvedValueOnce({ nodes: [node], layoutDigest: "TRANSIENT", component: "p/A", activity: "A" })
+      .mockResolvedValue({ nodes: [node], layoutDigest: "SETTLED", component: "p/A", activity: "A" });
+
+    const before = await beginActionWait(connectionWithTiny(), { fallbackSleepMs: 1, postState: true });
+    const result = await finishActionWait(before);
+
+    expect(saveLastSnapshotMock).toHaveBeenCalledOnce();
+    const cached = saveLastSnapshotMock.mock.calls[0]?.[0] as { layoutDigest?: string };
+    expect(cached.layoutDigest).toBe("SETTLED");
+    expect(result?.snapshot).toBeDefined();
   });
 
   // F2: an aborted/timed-out wait is not "tiny-unavailable".

@@ -12,9 +12,79 @@ import {
   parseLauncherActivities,
   parsePackageList,
   parseScreenSize,
+  humanizeAppLabel,
+  pointFromSnapshotTarget,
+  reconcileSnapshotByIdentity,
   resolveAppPackage,
   scrollSwipe,
 } from "./device-actions.js";
+import type { SnapshotDocument, SnapshotNode } from "./snapshot.js";
+
+const mkNode = (o: Partial<SnapshotNode>): SnapshotNode =>
+  ({
+    ref: "@e1",
+    role: "button",
+    enabled: true,
+    hittable: true,
+    longPressable: false,
+    checked: false,
+    checkable: false,
+    focusable: false,
+    focused: false,
+    scrollable: false,
+    selected: false,
+    editable: false,
+    ...o,
+  }) as SnapshotNode;
+
+const mkDoc = (nodes: SnapshotNode[], over: Partial<SnapshotDocument> = {}): SnapshotDocument =>
+  ({
+    backend: "tiny",
+    deviceId: "emu",
+    component: "p/A",
+    activity: "A",
+    layoutDigest: "OLD",
+    nodes,
+    ...over,
+  }) as SnapshotDocument;
+
+describe("reconcileSnapshotByIdentity (same-screen drift recovery)", () => {
+  it("keeps @eN refs but adopts live geometry by stableId; drops vanished targets", () => {
+    const cached = mkDoc([
+      mkNode({ ref: "@e2", stableId: "s1", label: "Storage", title: "Storage", identifier: "p:id/storage", bounds: { left: 0, top: 0, right: 100, bottom: 100 } }),
+      mkNode({ ref: "@e3", stableId: "s2", label: "Battery", title: "Battery", bounds: { left: 0, top: 200, right: 100, bottom: 300 } }),
+    ]);
+    // Fresh screen: s1 scrolled down (new bounds, new ref numbering); s2 gone.
+    const fresh = mkDoc(
+      [
+        mkNode({ ref: "@e9", stableId: "s1", label: "Storage", title: "Storage", identifier: "p:id/storage", bounds: { left: 0, top: 500, right: 100, bottom: 600 } }),
+        mkNode({ ref: "@e10", stableId: "s9", label: "New", title: "New", bounds: { left: 0, top: 0, right: 50, bottom: 50 } }),
+      ],
+      { layoutDigest: "NEW" },
+    );
+
+    const r = reconcileSnapshotByIdentity(cached, fresh);
+
+    // @e2 still resolves (ref preserved) but to the node's CURRENT position.
+    expect(pointFromSnapshotTarget(r, "@e2")).toEqual({ x: 50, y: 550 });
+    // A durable selector resolves to the same moved node.
+    expect(pointFromSnapshotTarget(r, "label=Storage")).toEqual({ x: 50, y: 550 });
+    // The vanished target fails closed instead of tapping a stale coordinate.
+    expect(pointFromSnapshotTarget(r, "@e3")).toBeNull();
+    // Digest is adopted from the fresh capture.
+    expect(r.layoutDigest).toBe("NEW");
+  });
+});
+
+describe("humanizeAppLabel", () => {
+  it("prefers a known open-app alias, else a title-cased package leaf", () => {
+    expect(humanizeAppLabel("com.android.chrome")).toBe("Chrome");
+    expect(humanizeAppLabel("com.android.settings")).toBe("Settings");
+    expect(humanizeAppLabel("com.android.vending")).toBe("Play"); // shortest alias wins
+    expect(humanizeAppLabel("com.google.android.deskclock")).toBe("Deskclock");
+    expect(humanizeAppLabel("com.google.android.contacts")).toBe("Contacts");
+  });
+});
 
 describe("agent device action helpers", () => {
   it("recognizes refs, bare indices, and durable selectors as snapshot targets", () => {

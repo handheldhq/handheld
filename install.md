@@ -86,12 +86,21 @@ it bootstraps the Tiny helper over adb and saves a `local` connection. It shares
 on-device Tiny with `handheld-harness` via a fixed token, so both tools can drive the
 same device at once.
 
+> **First connect is slow (~30s).** The *first* `connect --local` on a device
+> installs and starts the Tiny helper, which can take ~30 seconds; later commands
+> are fast. This one-time bootstrap applies to local devices too, not just cloud —
+> don't retry prematurely if the first connect seems to hang.
+
 ## The core loop
 
 Snapshot → read refs → act → re-snapshot. Snapshot refs (`@e1`, `@e2`, …) are cached to
 disk between invocations, so a later `tap @e2` resolves against the last `snap`.
 Before dispatch, handheld verifies the cached snapshot still matches Tiny's live
-foreground/digest; stale cached targets fail closed with a re-snap hint.
+foreground. If only the layout drifted on the **same** screen (a clock tick, async
+content finishing, the settle tail of a `--post-state`), it transparently
+re-resolves your `@eN`/`id=`/`label=` target against a fresh snapshot by identity —
+so a target that merely moved still works without a manual re-`snap`. Only a real
+navigation to a **different** screen fails closed with a re-snap hint.
 
 ```bash
 handheld snap                    # compact refs (@e1…) + readable text; add --screenshot for a JPEG file
@@ -162,6 +171,8 @@ them (browser login or account approval).
    - **`connect --local` → "No adb device in 'device' state"** → start an emulator or plug in
      a device and authorize USB debugging (`adb devices` should list it as `device`).
    - **`connect --local` → "Multiple adb devices"** → pass an explicit serial.
+   - **First `connect --local` takes ~30s** → expected one-time Tiny helper
+     bootstrap on that device (local, not just cloud); later commands are fast.
    - **First cloud `snap` is slow / "Getting Tiny installed…"** → expected one-time bootstrap
      (up to ~30s); later snapshots are fast.
    - **Snapshot says Tiny unavailable** → `handheld tiny bootstrap` (`--force` to reinstall).

@@ -2651,10 +2651,12 @@ export async function startMcpServer(deviceId?: string): Promise<void> {
             : null;
           return jsonContent({
             ...snapshot,
+            // Drop each node's verbose `raw` Tiny blob; the normalized fields
+            // carry what an agent needs. The full dump is available via raw:true.
             nodes: snapshotNodesForDisplay(snapshot, {
               // Default keeps read-only text; interactive:true returns actionable-only.
               interactive: args?.interactive === true,
-            }),
+            }).map(({ raw: _raw, ...node }) => node),
             raw: args?.raw ? snapshot.raw : undefined,
             screenshot: screenshot?.ok
               ? {

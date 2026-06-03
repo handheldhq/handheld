@@ -108,6 +108,40 @@ export function pointFromSnapshotTarget(
   return nodeCenter(node);
 }
 
+/**
+ * Recover dispatch targets after a same-screen layout drift — a clock tick,
+ * async content finishing, or the settle tail of a `--post-state` capture — that
+ * would otherwise fail-close a perfectly valid ref/selector as "stale". Keeps the
+ * cached snapshot's `@eN` ref numbering (so refs the caller already read still
+ * resolve) but adopts each node's LIVE geometry and state from a fresh snapshot,
+ * matched by `stableId`. A node whose identity is gone from the fresh screen is
+ * marked non-interactive so it fails closed instead of dispatching to a stale
+ * coordinate. Nodes without a `stableId` are left untouched (best effort).
+ */
+export function reconcileSnapshotByIdentity(
+  cached: SnapshotDocument,
+  fresh: SnapshotDocument
+): SnapshotDocument {
+  const liveById = new Map<string, SnapshotNode>();
+  for (const node of fresh.nodes) {
+    if (node.stableId) liveById.set(node.stableId, node);
+  }
+  const nodes = cached.nodes.map((node) => {
+    if (!node.stableId) return node;
+    const live = liveById.get(node.stableId);
+    if (!live) {
+      return { ...node, bounds: undefined, hittable: false, longPressable: false };
+    }
+    return { ...live, ref: node.ref };
+  });
+  return {
+    ...cached,
+    nodes,
+    layoutDigest: fresh.layoutDigest,
+    foregroundSignature: fresh.foregroundSignature,
+  };
+}
+
 export function packageListCommand(includeSystem = true): string {
   return includeSystem ? "pm list packages" : "pm list packages -3";
 }
@@ -177,6 +211,31 @@ export function resolveAppPackage(input: {
     candidates.find((entry) => appNeedle(entry.packageName).includes(needle)) ??
     null
   );
+}
+
+// Best-effort human label for a package id, so `list-apps --json` gives an agent
+// a readable name (and the `open-app` alias to use) instead of forcing it to
+// hardcode `com.google.android.deskclock → Clock`. Heuristic: a known open-app
+// alias when one maps to the package, else a title-cased package leaf. NOT the
+// exact store display name — true labels need a per-package PackageManager query.
+const ALIAS_BY_PACKAGE: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const [alias, pkg] of Object.entries(APP_ALIASES)) {
+    // Prefer the shortest alias for a package (e.g. "play" over "play store").
+    if (!map[pkg] || alias.length < map[pkg].length) map[pkg] = alias;
+  }
+  return map;
+})();
+
+function titleCase(value: string): string {
+  return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export function humanizeAppLabel(packageName: string): string {
+  const alias = ALIAS_BY_PACKAGE[packageName];
+  if (alias) return titleCase(alias);
+  const leaf = packageName.split(".").pop() || packageName;
+  return titleCase(leaf);
 }
 
 export function startAppCommand(app: LauncherActivity): string {

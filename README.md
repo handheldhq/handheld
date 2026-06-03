@@ -112,7 +112,9 @@ Tiny instance via a fixed token), and saves a relay-less connection marked
 `local`. Every control/observation command (`snap`, `tap`, `type`, `swipe`,
 `shell`, `screenshot`, …) runs without an API key; a key is only needed for
 Gateway operations that provision or list **cloud** phones (`init` without `--local`, `create`,
-`devices`, cloud `connect`). Requires `adb` on PATH.
+`devices`, cloud `connect`). Requires `adb` on PATH. The **first** `connect --local`
+on a device installs/starts the Tiny helper and can take ~30s (one-time, local as
+well as cloud); later commands are fast.
 
 ## Device control
 
@@ -131,8 +133,8 @@ handheld swipe 540 400 540 1200         # swipe gesture
 handheld type "hello world"             # set the focused field (replaces existing text)
 handheld type @e5 "hello world"         # set @e5 to the text
 handheld type @e5 "hello world" --append  # append instead of replacing
-handheld list-apps                      # list launchable app packages
-handheld open-app settings              # open by package, alias, or package-like name
+handheld list-apps                      # launchable app packages (one id per line; --json → [{package,label}])
+handheld open-app settings              # open by package, alias (chrome/settings/gmail/maps/play/youtube/files), or package-like name
 handheld launch "https://example.com"   # deep link / intent
 handheld launch com.example/.Main       # explicit component
 handheld copy "copied text"             # set clipboard
@@ -150,8 +152,10 @@ handheld shell "pm list packages"       # run shell command
 off-screen nodes are dropped (with a scroll hint), and only the foreground
 window's nodes appear inline — other windows (status bar, nav bar, keyboard) are
 grouped or summarized below. Use `--all` for the full uncollapsed tree,
-`--offscreen` to keep below-the-fold nodes, and `--raw`/`--json` for the complete
-structured node list (every field, never culled).
+`--offscreen` to keep below-the-fold nodes. `--json` returns the structured node
+list with the normalized fields (no per-node `raw` blob — that kept each node
+~1KB); pass `--raw` for the complete unprocessed Tiny response (every field, never
+culled).
 
 ```
 Snapshot com.android.settings [com.android.settings.homepage.SettingsHomepageActivity] (18/116 nodes, backend=tiny)
@@ -187,10 +191,15 @@ Line grammar:
   foreground activity. **`[keyboard open · …]`** — the IME, collapsed to one line
   (the keys are rarely tap targets — use `type`; pass `--all` to expand them).
 
-Refs are invalidated by anything that changes the screen. Before a cached
-`@eN`/selector target dispatches input, handheld compares the last snapshot's
-foreground signature with Tiny's live foreground/digest and refuses stale targets
-with a re-`snap` hint. The `id=` and `"title"` shown on actionable nodes double
+Before a cached `@eN`/selector target dispatches input, handheld compares the last
+snapshot's foreground with Tiny's live foreground. A move to a **different** screen
+fails closed with a re-`snap` hint. But when only the **layout drifted on the same
+screen** — a ticking clock, async content finishing, or the settle tail of a
+`--post-state` capture — handheld transparently re-resolves your target against a
+fresh snapshot by identity (`@eN` via the node's stable id; `id=`/`label=`/`text=`
+by selector) and dispatches against its current position. So a target that merely
+moved keeps working without a manual re-`snap`; only a genuine navigation forces
+one. The `id=` and `"title"` shown on actionable nodes double
 as **durable selectors**: `tap id=search_action_bar`, `tap 'label=Network &
 internet'`, or `type 'label=Notes' "hi"` resolve against the last snapshot but
 survive `@eN` renumbering within that snapshot (`id=` matches the full or
@@ -253,11 +262,20 @@ otherwise it falls back to a short sleep. Use `--no-settle` to skip or
 `--settle <ms>` to cap the wait. All commands accept `--json` for structured
 output and `--device <id>` to target a specific profile/session alias.
 
+In text mode, action commands that don't print a snapshot (`tap`, `open-app`,
+`back`/`home`/`recent`, `swipe`, `long-press`, …) acknowledge success with a one-
+line `ok` — or `ok (no UI change)` when the settle detected the action was a no-op
+— so success is distinguishable from a silent failure. `--json` carries the full
+result (incl. the `wait` settle metadata) and `--post-state` prints the snapshot
+instead.
+
 Pass `--post-state` to fold the settled post-action snapshot into the result
 (`snapshot` field in `--json`; printed like `snap` in text mode), so you don't
 need a separate `snap` after each action. It reuses the `snap` output shape
-(display-filtered nodes, `totalNodeCount`) and refreshes the cached snapshot so
-the next ref-based action resolves against the post-action screen. The CLI is
+(display-filtered nodes, `totalNodeCount`) and refreshes the cached snapshot. The
+capture waits for the layout to actually stop moving before caching, and the
+same-screen identity re-resolution above covers any residual drift, so a `@eN`
+ref printed by a `--post-state` action resolves on the very next command. The CLI is
 opt-in; MCP action tools include the post-state snapshot by default.
 
 `type`/`fill` set text through Tiny's semantic `setText` (`ACTION_SET_TEXT`)

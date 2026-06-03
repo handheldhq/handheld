@@ -55,6 +55,7 @@ import type { TinyReader } from "../action-wait.js";
 import { hasFocusedEditableField, typeViaTinySetText } from "../text-entry.js";
 import {
   formatSnapshot,
+  canonicalForegroundComponent,
   clearLastSnapshot,
   compareForegroundSignatures,
   foregroundSignatureOf,
@@ -74,6 +75,7 @@ import {
   isSelectorTarget,
   isSnapshotTarget,
   launchTargetCommand,
+  humanizeAppLabel,
   launcherActivitiesCommand,
   normalizeKeyInput,
   packageListCommand,
@@ -83,6 +85,7 @@ import {
   parsePackageList,
   parseScreenSize,
   pointFromSnapshotTarget,
+  reconcileSnapshotByIdentity,
   resolveAppPackage,
   screenSizeCommand,
   scrollSwipe,
@@ -392,6 +395,12 @@ function outputResult(
       // --post-state in text mode: render the settled snapshot like `snap` does.
       // Nodes are already display-filtered, so format without re-filtering.
       console.log(formatSnapshot(result.snapshot as unknown as SnapshotDocument, { header: true }));
+    } else if (!result.settleInconclusive) {
+      // Acknowledge the action in text mode so success is distinguishable from a
+      // no-op — these commands (open-app, tap, back/home/recent, swipe,
+      // long-press, …) were previously silent on success. `--json` still carries
+      // the full result; `--post-state` prints the settled snapshot instead.
+      console.log(result.wait?.changed === false ? "ok (no UI change)" : "ok");
     }
   }
   if (!result.ok) {
@@ -514,13 +523,33 @@ async function completeLiveForegroundSignature(
   }
 }
 
-async function assertCachedSnapshotFresh(input: {
+// A fresh full snapshot (no cache write — transparent to the caller's session),
+// used to recover dispatch targets after a same-screen layout drift.
+async function captureSnapshotDoc(
+  connection: Connection,
+  deviceId: string
+): Promise<SnapshotDocument> {
+  const tiny = await ensureTinyState(connection);
+  const raw = await captureTinySnapshotResilient(connection, tiny);
+  return normalizeTinySnapshot({ deviceId, raw });
+}
+
+// Verify the cached snapshot still describes the live screen and return the
+// snapshot to resolve the target against. Fast path (screen unchanged): the
+// cached snapshot. Same Activity but the layout drifted — a clock tick, async
+// content finishing, or the settle tail of a `--post-state` capture: recover by
+// reconciling the cached refs against a fresh snapshot by identity, so a valid
+// target that merely moved still resolves (this is the fix for `--post-state`
+// refs and `id=`/`label=` selectors going "stale" on live screens). Only a
+// genuinely different foreground component — or an unverifiable signature —
+// fails closed.
+async function snapshotForDispatch(input: {
   adb: AdbTransport | null;
   connection: Connection;
   relay: Transport | null;
   snapshot: SnapshotDocument;
   target: string;
-}): Promise<void> {
+}): Promise<SnapshotDocument> {
   const cached = input.snapshot.foregroundSignature ?? foregroundSignatureOf(input.snapshot);
   let live: SnapshotForegroundSignature;
   try {
@@ -538,12 +567,27 @@ async function assertCachedSnapshotFresh(input: {
   }
 
   const comparison = compareForegroundSignatures({ cached, live });
-  if (!comparison.ok) {
-    console.error(`Cached snapshot target "${input.target}" is stale.`);
-    console.error("Reason: " + (comparison.reason ?? "screen changed since last snap"));
-    console.error("Hint: screen changed since last snap — run `handheld snap` again before using cached refs/selectors.");
-    process.exit(1);
+  if (comparison.ok) return input.snapshot;
+
+  // Same screen, layout drifted → recover the target by identity rather than
+  // forcing a re-snap. Only attempt this when the foreground component is
+  // unchanged and comparable on both sides; a component change is a real
+  // navigation and must still fail closed.
+  const cachedComponent = canonicalForegroundComponent(cached.component);
+  const liveComponent = canonicalForegroundComponent(live.component);
+  if (cachedComponent && cachedComponent === liveComponent) {
+    try {
+      const fresh = await captureSnapshotDoc(input.connection, input.snapshot.deviceId);
+      return reconcileSnapshotByIdentity(input.snapshot, fresh);
+    } catch {
+      // Couldn't capture a fresh snapshot — fall through to fail closed.
+    }
   }
+
+  console.error(`Cached snapshot target "${input.target}" is stale.`);
+  console.error("Reason: " + (comparison.reason ?? "screen changed since last snap"));
+  console.error("Hint: screen changed since last snap — run `handheld snap` again before using cached refs/selectors.");
+  process.exit(1);
 }
 
 async function tapTargetFromArgs(input: {
@@ -562,14 +606,14 @@ async function tapTargetFromArgs(input: {
       console.error("Hint: run `handheld snap` first — targets resolve against the last snapshot.");
       process.exit(1);
     }
-    await assertCachedSnapshotFresh({
+    const resolveSnapshot = await snapshotForDispatch({
       adb: input.adb,
       connection: input.connection,
       relay: input.relay,
       snapshot,
       target: input.target,
     });
-    const center = pointFromSnapshotTarget(snapshot, input.target);
+    const center = pointFromSnapshotTarget(resolveSnapshot, input.target);
     if (!center) {
       console.error(`Target "${input.target}" did not resolve to a tappable node.`);
       console.error(
@@ -680,7 +724,11 @@ async function focusClearAndType(input: {
     if (input.target && isSnapshotTarget(input.target)) {
       const snapshot = loadLastSnapshot(input.deviceId);
       if (snapshot) {
-        await assertCachedSnapshotFresh({
+        // Verify the target's screen is still current (recovers on same-screen
+        // layout drift, fails closed on a real navigation). typeViaTinySetText
+        // resolves the field by identity, so we only need the guard, not the
+        // reconciled snapshot it returns.
+        await snapshotForDispatch({
           adb: input.adb,
           connection: input.connection,
           relay: input.relay,
@@ -2412,11 +2460,15 @@ Caveats:
           return;
         }
         if (program.opts().json) {
+          // Drop each node's verbose `raw` Tiny blob (~1KB/node, ~40KB for a
+          // full screen) — the normalized fields already carry everything an
+          // agent needs. The complete unprocessed dump is still available via
+          // `snap --raw`.
           const nodes = snapshotNodesForDisplay(snapshot, {
             all: opts.all,
             interactive: opts.interactive,
             offscreen: opts.offscreen,
-          });
+          }).map(({ raw: _raw, ...node }) => node);
           console.log(JSON.stringify({
             ...snapshot,
             nodes,
@@ -2682,7 +2734,7 @@ Prints one package id per line — the exact value \`handheld open-app <package>
 expects.
   handheld list-apps                  # launchable apps only
   handheld list-apps --system         # every installed package (incl. system)
-  handheld list-apps --json           # JSON array (--json is a global flag)
+  handheld list-apps --json           # [{package, label}, …] (--json is a global flag)
 
 Caveat: --system is a long list; filter with \`grep\` (e.g. \`handheld list-apps
 --system | grep chrome\`).`
@@ -2704,7 +2756,13 @@ Caveat: --system is a long list; filter with \`grep\` (e.g. \`handheld list-apps
               ...new Set(launcherAppRows(activities, packages).map((app) => app.packageName)),
             ].sort();
         if (program.opts().json) {
-          console.log(JSON.stringify({ ok: true, apps: rows }));
+          // {package, label} objects so an agent gets a readable name (+ the
+          // open-app alias) without hardcoding package→name maps. label is
+          // best-effort (alias or package leaf), not the exact store name.
+          console.log(JSON.stringify({
+            ok: true,
+            apps: rows.map((pkg) => ({ package: pkg, label: humanizeAppLabel(pkg) })),
+          }));
         } else {
           console.log(rows.join("\n"));
         }

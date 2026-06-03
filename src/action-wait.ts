@@ -197,11 +197,36 @@ export async function finishActionWait(
   }
 }
 
+// The settle in computeWait can declare "stable" during a brief lull while a
+// screen is still rendering async content (storage sizes, search suggestions,
+// a freshly-pushed Activity). A single capture here can then store a *transient*
+// layoutDigest that no longer matches the screen by the next command — which
+// fail-closes the very refs --post-state just printed as "stale". So before
+// caching, confirm the layout has actually stopped moving (two consecutive equal
+// digests), bounded so screens that never go quiet still return promptly.
+const POST_STATE_CONFIRM_BUDGET_MS = 1_000;
+const POST_STATE_CONFIRM_INTERVAL_MS = 120;
+
 async function capturePostStateSnapshot(
   reader: TinyReader,
   deviceId: string
 ): Promise<SnapshotOutput> {
-  const raw = await reader.snapshot();
+  let raw = await reader.snapshot();
+  let digest = typeof raw.layoutDigest === "string" ? raw.layoutDigest : undefined;
+  // Only worth confirming when there's a digest to compare against; without one
+  // we can't detect movement, so cache the single read (no extra round-trips).
+  if (digest) {
+    const deadline = Date.now() + POST_STATE_CONFIRM_BUDGET_MS;
+    while (Date.now() < deadline) {
+      await sleep(POST_STATE_CONFIRM_INTERVAL_MS);
+      const next = await reader.snapshot();
+      const nextDigest = typeof next.layoutDigest === "string" ? next.layoutDigest : undefined;
+      raw = next;
+      if (nextDigest && nextDigest === digest) break; // settled: two equal reads
+      digest = nextDigest;
+      if (!digest) break; // lost the digest signal — cache what we have
+    }
+  }
   const snapshot = normalizeTinySnapshot({ deviceId, raw });
   // Refresh the cached snapshot so subsequent ref-based actions resolve against
   // the post-action screen, not the pre-action one.
