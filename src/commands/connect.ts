@@ -701,7 +701,12 @@ export function parseAdbDevices(output: string): AdbDeviceLine[] {
  */
 export function resolveLocalSerial(
   devices: AdbDeviceLine[],
-  requested?: string
+  requested?: string,
+  // Remediation grammar for the multi-device error. Defaults to `connect`'s
+  // positional form; callers with a different grammar (e.g. `init`, which uses
+  // the `--local-serial` flag) pass their own so the error names the command
+  // the user actually ran instead of misdirecting them to `connect`.
+  remediation = "handheld connect --local <serial>"
 ): { serial: string } | { error: string } {
   if (requested) {
     const match = devices.find((d) => d.serial === requested);
@@ -727,7 +732,7 @@ export function resolveLocalSerial(
   return {
     error: `Multiple adb devices (${ready
       .map((d) => d.serial)
-      .join(", ")}). Pass one: handheld connect --local <serial>`,
+      .join(", ")}). Pass one: ${remediation}`,
   };
 }
 
@@ -739,9 +744,15 @@ export async function connectLocalDevice(opts: {
   json?: boolean;
   serial?: string;
   startTiny?: boolean;
+  // Command-specific remediation for the multi-device error (see resolveLocalSerial).
+  remediation?: string;
 }): Promise<ConnectLocalResult> {
   const json = !!opts.json;
-  const resolution = resolveLocalSerial(listAdbDevices(), opts.serial);
+  const resolution = resolveLocalSerial(
+    listAdbDevices(),
+    opts.serial,
+    opts.remediation
+  );
   if ("error" in resolution) throw new Error(resolution.error);
   const serial = resolution.serial;
 

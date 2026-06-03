@@ -92,6 +92,7 @@ phone.
 
 ```bash
 handheld init --local                    # local dev setup: attach + scaffold agent-space, no auth
+handheld init --local --local-serial emulator-5554  # pick the device when several are attached (or set HANDHELD_DEVICE)
 handheld init --local --no-connect       # scaffold only; no device touch
 handheld connect --local                 # auto-pick the one ready adb device
 handheld connect --local emulator-5554   # or name the serial (`adb devices`)

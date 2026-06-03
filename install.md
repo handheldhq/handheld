@@ -75,10 +75,16 @@ only for local dev, CI on an emulator, or a plugged-in phone.
 
 ```bash
 handheld init --local                    # local dev setup: attach + scaffold agent-space, no auth
+handheld init --local --local-serial emulator-5554  # pick the device when several are attached
 handheld init --local --no-connect       # scaffold only; no device touch
 handheld connect --local                 # attach-only: auto-pick the sole ready adb device
 handheld connect --local emulator-5554   # or name the serial (see `adb devices`)
 ```
+
+With a single device attached, `init --local` auto-selects it. With several, pass
+`--local-serial <serial>` (or set `HANDHELD_DEVICE`); `init` honors the same env the
+root `--device` flag documents. `connect --local <serial>` takes the serial
+positionally.
 
 `init --local` scaffolds `.handheld/`, MCP config, helpers, skills, and evidence
 storage before optionally attaching. `connect --local` is the attach-only sibling:

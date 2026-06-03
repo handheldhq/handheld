@@ -43,6 +43,35 @@ describe("local adb attach (connect --local)", () => {
     expect("error" in many && many.error).toContain("emulator-5556");
   });
 
+  it("defaults the multi-device remediation to `connect --local <serial>`", () => {
+    const many = resolveLocalSerial([
+      { serial: "emulator-5554", state: "device" },
+      { serial: "emulator-5556", state: "device" },
+    ]);
+    expect("error" in many && many.error).toContain(
+      "handheld connect --local <serial>"
+    );
+  });
+
+  it("uses a caller-supplied remediation hint in the multi-device error", () => {
+    // init reaches this resolver too; its error must name init's flag grammar,
+    // not connect's positional grammar (the audited misdirection).
+    const many = resolveLocalSerial(
+      [
+        { serial: "emulator-5554", state: "device" },
+        { serial: "emulator-5556", state: "device" },
+      ],
+      undefined,
+      "handheld init --local --local-serial <serial>"
+    );
+    expect("error" in many && many.error).toContain(
+      "handheld init --local --local-serial <serial>"
+    );
+    expect("error" in many && many.error).not.toContain(
+      "connect --local <serial>"
+    );
+  });
+
   it("honors an explicit serial only when it exists and is ready", () => {
     const devices = [
       { serial: "emulator-5554", state: "device" },

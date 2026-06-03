@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `init --local` now honors `--local-serial`, then the root `--device` flag, then `HANDHELD_DEVICE` for device selection (mirrors `run` and the env the root `--device` flag documents) — a pinned device "just works" instead of erroring on multi-device.
+- The multi-device "Multiple adb devices" error now names the command you ran: `init` points at `handheld init --local --local-serial <serial>` (was: always `handheld connect --local <serial>`, which `init` rejects as a positional arg). Docs (README + install.md local sections) now show `--local-serial` for the multi-device case.
 - `status` (disconnected) hint now points local users at `handheld connect --local [serial]` instead of framing local adb as "advanced dev/CI only".
 - Docs: clarify `current-app` prints `package/activity` in text mode (the `{packageName, activity, component}` object is `--json`-only); note that a focused field's typed text may surface as its title (not the `= "value"` slot) and that an empty focused field is filtered from the compact snapshot.
 

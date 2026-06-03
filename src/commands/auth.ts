@@ -415,6 +415,7 @@ type InitLocalWorkflowOptions = {
   harnessWorkspace?: boolean;
   local?: boolean;
   localSerial?: string;
+  rootDevice?: string;
   workspace?: string;
   workspaceTemplate?: string;
 };
@@ -423,6 +424,24 @@ function resolveLocalInitApiUrl(raw?: string): string {
   const explicit = raw?.trim();
   const envUrl = process.env.HANDHELD_API_URL?.trim();
   return (explicit || envUrl || "").replace(/\/$/, "");
+}
+
+/**
+ * Pick the adb serial for `init --local`, honoring (in order) the explicit
+ * `--local-serial` flag, the root `--device` flag, then the `HANDHELD_DEVICE`
+ * env var — the same env the root `--device` option documents ("or set
+ * HANDHELD_DEVICE env"). Mirrors `run`'s `--local-serial ?? --device` fallback
+ * and keeps the env promise honest for init. Returns undefined (auto-select a
+ * sole device) when nothing usable is set.
+ */
+export function resolveLocalInitSerial(
+  localSerial?: string,
+  rootDevice?: string,
+  envDevice = process.env.HANDHELD_DEVICE
+): string | undefined {
+  const pick = localSerial ?? rootDevice ?? envDevice;
+  const trimmed = pick?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 async function initLocalWorkflow(
@@ -434,13 +453,18 @@ async function initLocalWorkflow(
     throw new Error('unsupported workspace template "' + opts.workspaceTemplate + '". Supported templates: harness');
   }
 
+  const localSerial = resolveLocalInitSerial(opts.localSerial, opts.rootDevice);
   let connection: Awaited<ReturnType<typeof connectLocalDevice>> | null = null;
-  let deviceId: string | null = opts.localSerial ?? null;
+  // In --no-connect (scaffold-only) mode this serial is caller-asserted: it is
+  // recorded in the workspace as the default device without an adb check. When
+  // we do connect (below), connectLocalDevice validates it against live adb.
+  let deviceId: string | null = localSerial ?? null;
   if (opts.device !== false && opts.connect !== false) {
     connection = await connectLocalDevice({
       json,
-      serial: opts.localSerial,
+      serial: localSerial,
       startTiny: true,
+      remediation: "handheld init --local --local-serial <serial>",
     });
     deviceId = connection.deviceId;
   }
@@ -713,7 +737,10 @@ Caveats:
             throw new Error("--local-serial requires --local");
           }
           if (opts.local === true) {
-            await initLocalWorkflow(opts, json);
+            await initLocalWorkflow(
+              { ...opts, rootDevice: program.opts().device },
+              json,
+            );
             return;
           }
           // If a key is already available (env or saved config), skip browser

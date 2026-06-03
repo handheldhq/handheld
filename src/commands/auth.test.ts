@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   configuredApiKey,
   isTerminalDeviceFailureStatus,
+  resolveLocalInitSerial,
   resolveLoginApiUrl,
 } from "./auth.js";
 import { maskApiKey } from "../redact.js";
@@ -62,6 +63,40 @@ describe("resolveLoginApiUrl", () => {
     process.env.HANDHELD_API_URL = "https://env.gateway.test/";
 
     expect(resolveLoginApiUrl()).toBe("https://env.gateway.test");
+  });
+});
+
+describe("resolveLocalInitSerial (init --local device selection)", () => {
+  afterEach(() => {
+    delete process.env.HANDHELD_DEVICE;
+  });
+
+  it("prefers an explicit --local-serial over everything", () => {
+    expect(
+      resolveLocalInitSerial("emulator-5554", "emulator-5556", "emulator-5558")
+    ).toBe("emulator-5554");
+  });
+
+  it("falls back to the root --device flag when --local-serial is absent", () => {
+    expect(resolveLocalInitSerial(undefined, "emulator-5556")).toBe(
+      "emulator-5556"
+    );
+  });
+
+  it("honors HANDHELD_DEVICE env when no flag is given (the documented promise)", () => {
+    expect(resolveLocalInitSerial(undefined, undefined, "emulator-5558")).toBe(
+      "emulator-5558"
+    );
+  });
+
+  it("reads HANDHELD_DEVICE from the environment by default", () => {
+    process.env.HANDHELD_DEVICE = "emulator-5560";
+    expect(resolveLocalInitSerial()).toBe("emulator-5560");
+  });
+
+  it("returns undefined (auto-select) when nothing is set, trimming blanks", () => {
+    expect(resolveLocalInitSerial()).toBeUndefined();
+    expect(resolveLocalInitSerial("   ", "  ", "  ")).toBeUndefined();
   });
 });
 
