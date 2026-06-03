@@ -821,14 +821,16 @@ Arg grammar:
   handheld connect --local [serial] [--no-tiny]
 
 Examples:
-  handheld connect --local                       # attach the one ready adb device/emulator (no API key)
-  handheld connect --local emulator-5554         # name the serial (see: adb devices)
+  handheld init                                  # first run: claim/connect a trial cloud phone
   handheld connect prof_abc123                   # cloud phone: start/reuse a session, relay + ADB
   handheld connect prof_abc123 --headed          # cloud phone + open the live viewer in a browser
+  handheld connect --local                       # local dev: attach one ready adb device/emulator
+  handheld connect --local emulator-5554         # local dev: name the serial (see: adb devices)
 
 Caveats:
-  - Cloud connect <deviceId> needs an API key — run \`handheld login\` (or set HANDHELD_API_KEY) first.
-  - \`--local [serial]\` needs \`adb\` on PATH and a device in 'device' state (see: adb devices); it never calls the Gateway.
+  - Cloud is the default product path. Use \`handheld init\` to claim/connect the first trial phone.
+  - Cloud reconnect <deviceId> needs an API key — run \`handheld login\` (or set HANDHELD_API_KEY) first.
+  - \`--local [serial]\` is for local dev/CI; it needs \`adb\` on PATH and a device in 'device' state (see: adb devices); it never calls the Gateway.
   - Both paths bootstrap the on-device Tiny helper for snapshots/input; pass --no-tiny to skip it.
   - With several adb devices attached, \`--local\` requires an explicit [serial]; with one it auto-picks.
   - Tear down with \`handheld disconnect\` (local: drops the forward; cloud: also stops the Gateway session).`
@@ -869,7 +871,7 @@ Caveats:
             "No device specified. Pass a device ID or set default: handheld config set default-device <id>"
           );
           console.error(
-            "Hint: run `handheld devices` to list cloud phones, or `handheld connect --local` to attach a local adb device with no key."
+            "Hint: run `handheld connect --help` to choose cloud or local. First-run cloud setup is `handheld init`; existing cloud devices are listed by `handheld devices`."
           );
           process.exit(1);
         }

@@ -169,8 +169,8 @@ export function registerStatusCommand(program: Command): void {
         "  handheld status --prune  # remove stale local connection records",
         "",
         "Caveats:",
-        "  - Reads locally saved connections. Empty output means nothing is attached: run handheld connect.",
-        "  - Relay offline or ADB dead means the transport dropped; reconnect with handheld connect <deviceId> or --local.",
+        "  - Reads locally saved connections. Empty output means nothing is attached: run handheld init.",
+        "  - Relay offline or ADB dead means the transport dropped; run handheld init to refresh the default cloud path.",
       ].join("\n")
     )
     .action(async (opts: { json?: boolean; prune?: boolean } = {}) => {
@@ -181,7 +181,8 @@ export function registerStatusCommand(program: Command): void {
         if (json) console.log(JSON.stringify({ connections: [], pruned: [] }));
         else {
           console.log("No active connections.");
-          console.log("Hint: attach a cloud phone with handheld connect <device-id>, or a local adb device with handheld connect --local.");
+          console.log("Hint: run handheld init to claim/connect a trial cloud phone and scaffold this project.");
+          console.log("Existing profiles can reconnect with handheld connect <device-id>; local adb is advanced dev/CI only.");
         }
         return;
       }

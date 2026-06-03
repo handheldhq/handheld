@@ -130,11 +130,11 @@ async function reportDeviceCodeHandoff(input: {
   deviceCode?: string;
   deviceId?: string;
   error?: string;
+  sessionId?: string;
   status: HandoffStatus;
 }): Promise<void> {
-  // The handoff exists only to redirect the browser sign-in tab to the device's
-  // live view. With a pre-configured key there is no such tab — nothing to hand
-  // off — so skip it entirely.
+  // The handoff exists only for the browser-approved claim tab. With a
+  // pre-configured key there is no such tab — nothing to hand off — so skip it.
   if (!input.deviceCode) return;
   await postJson(
     input.apiUrl,
@@ -143,6 +143,7 @@ async function reportDeviceCodeHandoff(input: {
       deviceCode: input.deviceCode,
       deviceId: input.deviceId,
       error: input.error,
+      sessionId: input.sessionId,
       status: input.status,
     },
     input.apiKey
@@ -239,6 +240,34 @@ export function isTerminalDeviceFailureStatus(status: string): boolean {
   return ["archived", "deleted", "error", "failed", "needs_repair"].includes(status);
 }
 
+export function initFailureHint(
+  err: unknown,
+  opts: { local?: boolean } = {}
+): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("timed out waiting for browser approval") ||
+    lower.includes("login code expired") ||
+    lower.includes("login code was already used")
+  ) {
+    return "Hint: browser approval needs a human. Complete the approval page, then re-run `handheld init`; headless agents should set HANDHELD_API_KEY and run `handheld init`.";
+  }
+  if (
+    opts.local === true ||
+    /adb|local-serial|emulator|usb debugging|no device in 'device' state|multiple adb devices/i.test(message)
+  ) {
+    return "Hint: local device setup needs adb and an authorized emulator/device. Run `adb devices`, then use `handheld connect --help` to choose the local --local path.";
+  }
+  if (
+    err instanceof ApiError ||
+    /billing|balance|trial|pool|hardware|provision|device .*ready|device .*settled|start/i.test(message)
+  ) {
+    return "Hint: cloud device setup needs auth and available trial capacity. Prefer HANDHELD_API_KEY (or `handheld login`), check `handheld billing`, then retry `handheld init`.";
+  }
+  return "Hint: run `handheld init --help` for setup options. For connection choices after setup, run `handheld connect --help`.";
+}
+
 async function waitForDeviceReady(
   api: HandheldApiClient,
   deviceId: string,
@@ -277,22 +306,23 @@ async function startDeviceForInit(
   api: HandheldApiClient,
   deviceId: string,
   opts: { withAdb?: boolean } = {}
-): Promise<void> {
+): Promise<string> {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const detail = await api.getDevice(deviceId).catch(() => null);
     if (
       detail?.device?.status === "active" &&
-      detail.activeSession?.status === "active"
+      detail.activeSession?.status === "active" &&
+      detail.activeSession.sessionId
     ) {
-      return;
+      return detail.activeSession.sessionId;
     }
 
     try {
-      await api.startDevice(deviceId, {
+      const started = await api.startDevice(deviceId, {
         enableAdb: opts.withAdb === true,
         enableH5: true,
       });
-      return;
+      return started.sessionId;
     } catch (err) {
       const retryable =
         err instanceof ApiError &&
@@ -309,10 +339,11 @@ async function startDeviceForInit(
         await sleep(5000);
         continue;
       }
-      await api.startDevice(deviceId, { enableAdb: false, enableH5: true });
-      return;
+      const started = await api.startDevice(deviceId, { enableAdb: false, enableH5: true });
+      return started.sessionId;
     }
   }
+  throw new Error("Timed out starting " + deviceId);
 }
 
 async function ensureTrialDevice(
@@ -347,7 +378,7 @@ async function prepareInitDevice(input: {
   deviceCode?: string;
   json?: boolean;
   withAdb?: boolean;
-}): Promise<string | null> {
+}): Promise<{ deviceId: string; sessionId: string } | null> {
   await reportDeviceCodeHandoff({ ...input, status: "provisioning" });
   const api = new HandheldApiClient({
     apiKey: input.apiKey,
@@ -366,13 +397,14 @@ async function prepareInitDevice(input: {
     deviceId,
     status: "starting",
   });
-  await startDeviceForInit(api, deviceId, { withAdb: input.withAdb });
+  const sessionId = await startDeviceForInit(api, deviceId, { withAdb: input.withAdb });
   await reportDeviceCodeHandoff({
     ...input,
     deviceId,
+    sessionId,
     status: "ready",
   });
-  return deviceId;
+  return { deviceId, sessionId };
 }
 
 type InitLocalWorkflowOptions = {
@@ -589,7 +621,8 @@ Examples:
 Caveats:
   - Browser flow polls until you approve; it times out (~10m) or errors if the code expires — just re-run.
   - CI/agents can skip this entirely: set HANDHELD_API_KEY and the cloud commands work headlessly without writing a key to config.
-  - Not needed for \`handheld connect --local\` — local adb devices require no key.`
+  - The default first-run path is \`handheld init\`: it claims/connects a trial cloud phone.
+  - Local adb devices are an advanced dev/CI path and do not need a key.`
     )
     .action(
       async (opts: { apiUrl?: string; manual?: boolean; open?: boolean }) => {
@@ -645,11 +678,11 @@ Arg grammar:
 Examples:
   handheld init                              # browser sign-in, claim/connect a phone, scaffold this project for agents
   HANDHELD_API_KEY=hk_... handheld init      # agent/CI path: no browser; stores the global key
-  handheld init --local                      # local adb/emulator setup; no browser, no API key
-  handheld init --local --no-connect          # scaffold agent-space only; no device touch
   handheld init --workspace ~/my-app          # scaffold a specific project directory
   handheld init --with-adb                   # also bring up the ADB transport, not just relay
   handheld init --no-device                  # sign in and scaffold workspace, but do not claim a phone
+  handheld init --local                      # advanced: local adb/emulator setup; no cloud phone
+  handheld init --local --no-connect          # advanced: scaffold only; no device touch
 
 Caveats:
   - With HANDHELD_API_KEY present it skips the browser entirely and saves that account key in ~/.handheld/config.json.
@@ -657,7 +690,7 @@ Caveats:
   - Without a key it opens a browser device-code flow; use --no-open on a headless host.
   - Claims a TRIAL cloud phone, sets it as default-device, connects it, and opens the live viewer when available.
   - Scaffolds a project-local harness agent space by default: .handheld/, agent-space/, helpers, skills, and evidence.
-  - For a LOCAL adb device, use \`handheld init --local\` for first-run agent-space setup or \`handheld connect --local\` for attach-only.`
+  - \`--local\` is for local dev/CI only; product onboarding should claim a cloud phone with bare \`handheld init\`.`
     )
     .action(
       async (opts: {
@@ -708,11 +741,12 @@ Caveats:
             }
           }
           let deviceId: string | null = null;
+          let prepared: { deviceId: string; sessionId: string } | null = null;
           let connection: Awaited<ReturnType<typeof connectDevice>> | null =
             null;
           let workspace: ProjectHarnessWorkspace | null = null;
           try {
-            deviceId =
+            prepared =
               opts.device === false
                 ? null
                 : await prepareInitDevice({
@@ -722,6 +756,7 @@ Caveats:
                     json,
                     withAdb: opts.withAdb,
                   });
+            deviceId = prepared?.deviceId ?? null;
             if (deviceId && opts.connect !== false) {
               connection = await connectDevice({
                 api: new HandheldApiClient({
@@ -729,6 +764,12 @@ Caveats:
                   apiUrl: login.apiUrl,
                 }),
                 deviceId,
+                // Browser-approved init already has a claim tab whose phone
+                // frame owns the human viewer. Do not also pop the raw Gateway
+                // /live tab, or Chrome may background the claim frame during H5
+                // warmup. Env/config init still opens the direct viewer. See
+                // docs/handheld-init-live-viewer-proof-2026-06-03.md.
+                headed: opts.open !== false && !json && !login.deviceCode,
                 json,
                 ...(opts.sessionTtl && opts.sessionTtl > 0
                   ? { sessionTtlMs: Math.round(opts.sessionTtl * 60 * 60 * 1000) }
@@ -749,17 +790,19 @@ Caveats:
               });
             }
           } catch (err) {
-            await reportDeviceCodeHandoff({
-              apiKey: login.apiKey,
-              apiUrl: login.apiUrl,
-              deviceCode: login.deviceCode,
-              deviceId: deviceId ?? undefined,
-              error:
-                err instanceof Error
-                  ? err.message
-                  : "Device preparation failed",
-              status: "error",
-            }).catch(() => undefined);
+            if (!prepared?.sessionId) {
+              await reportDeviceCodeHandoff({
+                apiKey: login.apiKey,
+                apiUrl: login.apiUrl,
+                deviceCode: login.deviceCode,
+                deviceId: deviceId ?? undefined,
+                error:
+                  err instanceof Error
+                    ? err.message
+                    : "Device preparation failed",
+                status: "error",
+              }).catch(() => undefined);
+            }
             throw err;
           }
 
@@ -820,7 +863,7 @@ Caveats:
           }
         } catch (err) {
           console.error("Init failed:", (err as Error).message);
-          console.error("Hint: check auth (prefer HANDHELD_API_KEY, or use `handheld login`) and balance (`handheld billing`); retry — trial pool hardware can be momentarily unavailable.");
+          console.error(initFailureHint(err, { local: opts.local === true }));
           process.exit(1);
         }
       }

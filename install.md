@@ -1,17 +1,18 @@
 ---
 name: handheld-install
-description: "Install the handheld CLI and connect it to a phone (cloud or local adb device) with minimal prompting, so an agent can get oriented and start driving."
+description: "Install the handheld CLI, claim a trial cloud phone, and start driving it with minimal prompting."
 ---
 
 # `handheld` installation & orientation
 
-Use this file to get oriented: install `handheld`, connect to a phone, and run the
-first snapshot. For the full command catalog read [`README.md`](README.md).
+Use this file to get oriented: install `handheld`, claim a trial cloud phone,
+and run the first snapshot. For the full command catalog read
+[`README.md`](README.md).
 
-`handheld` is a controller for an Android phone — either a **cloud phone** (a real
-device provisioned through the Gateway) or a **local adb device/emulator**. The
-control surface (`snap`/`tap`/`type`/`shell`/…) is the same for both; only how you
-*connect* differs.
+`handheld` is a controller for a real Android cloud phone provisioned through
+the Gateway. The default onboarding is cloud-first: one command claims a trial
+phone, connects it, lets the claim tab show the live device after browser
+approval, and scaffolds an agent-ready workspace.
 
 ## Install
 
@@ -27,17 +28,14 @@ pnpm install && pnpm run build
 node dist/cli.js --help          # `node dist/cli.js` ≡ `handheld`
 ```
 
-`adb` only needs to be on `$PATH` for local devices and pull-heavy workflows.
+`adb` is not required for the default cloud onboarding. It is only needed for
+local-device development and pull-heavy workflows.
 
-## Get a phone — two ways
+## Get a cloud phone
 
-Pick based on what the user wants. If unsure, ask which one; don't provision a cloud
-phone unprompted (it uses trial quota / billing).
-
-### A) Cloud phone — `handheld init`
-
-The product's onboarding. It may claim a trial cloud phone, starts or reuses a
-session, connects the live relay/viewer by default, opens the live viewer when available, and
+Run `handheld init`. This is the product onboarding path: it claims a trial
+cloud phone, starts or reuses a session, connects the live relay/viewer by
+default, lets the claim tab show the live phone after browser approval, and
 scaffolds this project as a mobile agent space.
 **How it authenticates depends on whether a key is already available:**
 
@@ -51,7 +49,7 @@ scaffolds this project as a mobile agent space.
   ```
 
 - **No key yet (interactive human at a terminal)** — `init` opens a browser login
-  for the user to complete, then provisions:
+  for the user to complete, then provisions the trial cloud phone:
 
   ```bash
   handheld init                    # opens a browser login — the user completes it
@@ -70,13 +68,13 @@ The generated project MCP config uses `handheld --mcp` by default; set
 `HANDHELD_BIN` during `init` only when the project should pin a development
 binary.
 
-### B) Local device / emulator — `handheld init --local` or `handheld connect --local`
+### Local device / emulator (advanced)
 
-Attaches directly over adb. **No Gateway, no session, no API key.** Use this for local
-dev, CI on an emulator, or a plugged-in phone.
+Local adb is an advanced development path, not the product onboarding. Use it
+only for local dev, CI on an emulator, or a plugged-in phone.
 
 ```bash
-handheld init --local                    # first-run local setup: attach + scaffold agent-space, no auth
+handheld init --local                    # local dev setup: attach + scaffold agent-space, no auth
 handheld init --local --no-connect       # scaffold only; no device touch
 handheld connect --local                 # attach-only: auto-pick the sole ready adb device
 handheld connect --local emulator-5554   # or name the serial (see `adb devices`)
@@ -116,7 +114,7 @@ need no API key** — a key is only required for Gateway provisioning (`init`/`c
   default and return the post-action snapshot. Point your agent's MCP config at it.
 - **One-shot task:** `handheld run "Open Settings and confirm Wi-Fi is visible"` spins up a
   sandboxed local agent wired to the handheld MCP server.
-- **Harness-shaped workspace:** `handheld init` creates the persistent project workspace; `handheld run --workspace-template harness "Inspect the current screen"` creates a per-task boxed workspace with the same helper/skill/evidence shape. Add `--local` for an adb device/emulator with no cloud API auth; use `--local-serial <serial>` when several are attached.
+- **Harness-shaped workspace:** `handheld init` creates the persistent project workspace; `handheld run --workspace-template harness "Inspect the current screen"` creates a per-task boxed workspace with the same helper/skill/evidence shape. Local adb remains available for dev/CI with `--local`.
 - **Shell out:** the discrete subcommands above work in any script (each call is a fresh
   process; state lives in `~/.handheld`).
 
@@ -149,16 +147,18 @@ Local:  adb device   <-- adb + on-device Tiny (localhost forward)     -->  handh
 
 ## First-time setup & troubleshooting
 
-Try a command first; only involve the user when a step genuinely needs them (browser
-login, plugging in a device, authorizing USB debugging).
+Try the cloud path first; only involve the user when a step genuinely needs
+them (browser login or account approval).
 
 1. Already connected? `handheld snap` prints a compact snapshot → you're done.
-2. Otherwise `handheld status`. If "No active connections", connect (cloud or local above).
+2. Otherwise `handheld status`. If "No active connections", run `handheld init`.
 3. Match the symptom:
    - **"No API key configured"** → only happens on a Gateway path. For a cloud
-     phone set `HANDHELD_API_KEY` (preferred) or run `handheld login`. For a
-     *local* device you don't need a key — use `handheld connect --local`.
-   - **"Not connected. Run `handheld connect`"** → no saved connection; connect first.
+     phone set `HANDHELD_API_KEY` (preferred) or run `handheld init` for browser
+     login and trial-phone provisioning.
+   - **"Not connected. Run `handheld connect`"** → no saved connection; run
+     `handheld init` for first-run cloud provisioning, or `handheld connect <id>`
+     only when reconnecting an existing cloud profile.
    - **`connect --local` → "No adb device in 'device' state"** → start an emulator or plug in
      a device and authorize USB debugging (`adb devices` should list it as `device`).
    - **`connect --local` → "Multiple adb devices"** → pass an explicit serial.
@@ -168,11 +168,11 @@ login, plugging in a device, authorizing USB debugging).
 
 ## First-run demo
 
-Connect, then open Settings and snapshot it so the user sees the controller driving the
-phone:
+Claim a cloud phone, then open Settings and snapshot it so the user sees the
+controller driving the phone:
 
 ```bash
-handheld connect --local            # or `handheld init` for a cloud phone
+handheld init                       # claim/connect a trial cloud phone
 handheld open-app settings
 handheld snap                        # compact refs + text for the Settings screen
 ```

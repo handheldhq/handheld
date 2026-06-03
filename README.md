@@ -4,7 +4,7 @@ CLI for Handheld cloud phone control through Gateway profiles, sessions, file
 push, and live transports. Cross-platform (macOS, Linux, Windows).
 
 > **Agents:** read [`install.md`](install.md) first — it orients you on install,
-> connecting to a cloud or local device, and the snapshot → act loop. This README is
+> claiming a cloud phone, and the snapshot → act loop. This README is
 > the full command reference.
 
 ## Install
@@ -19,11 +19,12 @@ npm install -g handheld
 npx handheld i
 ```
 
-`handheld i` opens a browser login when no API key is already available, starts a
-trial cloud phone when available, connects the live relay/viewer by default
-(`--with-adb` also requests provider ADB), starts the bundled Tiny helper when a
-device command path is available, redirects the approval tab to that phone's
-live device view, and scaffolds this project as a mobile agent space.
+`handheld i` is the product onboarding path: it claims a trial cloud phone,
+starts it, connects the live relay/viewer by default (`--with-adb` also requests
+provider ADB), starts the bundled Tiny helper when a device command path is
+available, lets the claim tab show that phone after browser approval, and
+scaffolds this project as a mobile agent space. The desired first-run moment is:
+one command, a claimed cloud phone in the browser, and an agent-ready workspace.
 
 **Already have a key? `init` runs headlessly — no browser.**
 When `HANDHELD_API_KEY` is present, `handheld init` skips the browser sign-in
@@ -81,14 +82,16 @@ Live relay/H5 viewer and CLI device-code auth now use Gateway-native
 profile/session routes. `handheld connect` starts or reuses a Gateway session and does
 not silently fall back to old Cloud API relay routes.
 
-## Local devices (no Gateway, no API key)
+## Local devices (advanced)
 
 `handheld` is also a plain controller for a local adb device or emulator — no
-cloud phone, no session, no API key required. Use it for local development,
-CI on an emulator, or driving a physical device you've plugged in.
+cloud phone, no session, no API key required. This is for local development,
+CI on an emulator, or a physical device you've plugged in. For product
+onboarding, prefer `handheld init` so the agent claims and connects a cloud
+phone.
 
 ```bash
-handheld init --local                    # first-run local setup: attach + scaffold agent-space, no auth
+handheld init --local                    # local dev setup: attach + scaffold agent-space, no auth
 handheld init --local --no-connect       # scaffold only; no device touch
 handheld connect --local                 # auto-pick the one ready adb device
 handheld connect --local emulator-5554   # or name the serial (`adb devices`)
@@ -98,11 +101,12 @@ handheld tap @e7
 handheld disconnect                      # tears down locally; never calls the Gateway
 ```
 
-`init --local` is the local first-run path: it creates `.handheld/`,
+`init --local` is the local dev/CI setup path: it creates `.handheld/`,
 `agent-space/`, MCP config, helpers, skills, and evidence directories without
 cloud auth; when it connects successfully, it saves that adb serial as the
-default device. Use `connect --local` when the workspace already exists and you
-only need to attach a device: it attaches over adb, bootstraps the Tiny helper on-device (the
+default device. Use `connect --help` to choose between cloud reconnects and
+local adb, and use `connect --local` only when the workspace already exists and
+you only need to attach a local device: it attaches over adb, bootstraps the Tiny helper on-device (the
 same path the [handheld-harness](https://github.com/) uses — they share one
 Tiny instance via a fixed token), and saves a relay-less connection marked
 `local`. Every control/observation command (`snap`, `tap`, `type`, `swipe`,

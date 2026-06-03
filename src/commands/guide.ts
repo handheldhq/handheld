@@ -8,16 +8,22 @@ const WORKFLOW = `
 handheld — agent operating guide
 
 CORE LOOP
-  connect  ->  snap  ->  read refs  ->  act  ->  re-snap to verify  ->  disconnect
+  init  ->  snap  ->  read refs  ->  act  ->  re-snap to verify  ->  disconnect
   Take a snapshot, read the actionable refs, act on one, then re-snapshot before
   acting again. The screen changes invalidate refs (see TARGETING).
 
-CONNECT
-  handheld connect --local                 # local adb device/emulator (no key)
-  handheld connect --local emulator-5554   # name the serial (see: adb devices)
-  handheld connect <deviceId>              # cloud phone (needs an API key)
+FIRST RUN
+  handheld init                            # claim/connect a trial cloud phone
+  HANDHELD_API_KEY=hk_... handheld init    # headless agent/CI path, no browser
+  handheld status                          # confirm the connected cloud phone
+
+CONNECT EXISTING
+  handheld connect <deviceId>              # reconnect an existing cloud phone
   handheld disconnect                      # tear down
-  Local connect bootstraps the on-device Tiny helper that serves snapshots/input.
+
+LOCAL DEV / CI
+  handheld init --local                    # local adb/emulator setup, advanced
+  handheld connect --local emulator-5554   # attach a local serial, advanced
 
 OBSERVE
   handheld snap                # compact, on-screen, agent-facing tree (default)

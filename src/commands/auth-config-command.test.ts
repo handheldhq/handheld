@@ -35,6 +35,7 @@ describe("config command secret display", () => {
     else process.env.MOBILEUSE_API_KEY = originalMobileUseApiKey;
     rmSync(home, { force: true, recursive: true });
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.resetModules();
   });
 
@@ -233,5 +234,120 @@ describe("config command secret display", () => {
     expect(() => auth.requireApiKey()).toThrow(
       "No API key configured. Set HANDHELD_API_KEY for cloud devices, or run `handheld login` to store a local key."
     );
+  });
+
+  it("branches init failure hints by browser, local adb, and cloud failures", async () => {
+    const auth = await import("./auth.js");
+    const { ApiError } = await import("../api-client.js");
+
+    expect(auth.initFailureHint(new Error("Timed out waiting for browser approval."))).toContain(
+      "browser approval needs a human"
+    );
+    expect(auth.initFailureHint(new Error("No adb device in 'device' state"), { local: true })).toContain(
+      "handheld connect --help"
+    );
+    expect(auth.initFailureHint(new ApiError(402, "NO_BALANCE", "No trial pool hardware"))).toContain(
+      "handheld billing"
+    );
+  });
+
+  it("reports the ready init handoff with deviceId and sessionId only", async () => {
+    const calls: Array<{ body?: Record<string, unknown>; method: string; path: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        const body = typeof init?.body === "string"
+          ? JSON.parse(init.body) as Record<string, unknown>
+          : undefined;
+        calls.push({ body, method: init?.method ?? "GET", path: url.pathname + url.search });
+
+        if (url.pathname === "/cli/device-code") {
+          return new Response(JSON.stringify({
+            deviceCode: "dc_1",
+            expiresInSeconds: 10,
+            ok: true,
+            pollIntervalSeconds: 0,
+            userCode: "ABCD",
+            verificationUrl: "https://app.test/claim?code=ABCD",
+          }), { headers: { "content-type": "application/json" } });
+        }
+        if (url.pathname === "/cli/device-code/poll") {
+          return new Response(JSON.stringify({
+            apiKeyPrefix: "muk_test",
+            apiUrl: "https://api.test",
+            ok: true,
+            status: "approved",
+          }), { headers: { "content-type": "application/json" } });
+        }
+        if (url.pathname === "/cli/init-device") {
+          return new Response(JSON.stringify({
+            deviceId: "prof_claim",
+            ok: true,
+          }), { headers: { "content-type": "application/json" } });
+        }
+        if (url.pathname === "/profiles/prof_claim") {
+          return new Response(JSON.stringify({
+            profile: {
+              id: "prof_claim",
+              status: "ready",
+            },
+          }), { headers: { "content-type": "application/json" } });
+        }
+        if (url.pathname === "/profiles/prof_claim/sessions") {
+          return new Response(JSON.stringify({
+            h5: {
+              baseUrl: "https://h5.test",
+              relayUrl: "/webrtc/relay/live?role=cli",
+              token: "h5_should_not_be_handed_off",
+              viewerUrl: "/live/live-token",
+            },
+            ok: true,
+            session: {
+              id: "sess_claim",
+              status: "active",
+            },
+          }), { headers: { "content-type": "application/json" } });
+        }
+        if (url.pathname === "/cli/device-code/handoff") {
+          return new Response(JSON.stringify({ ok: true }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+
+        return new Response(JSON.stringify({ ok: false, message: "unexpected " + url.pathname }), {
+          headers: { "content-type": "application/json" },
+          status: 404,
+        });
+      }),
+    );
+
+    await runAuth([
+      "init",
+      "--no-open",
+      "--no-connect",
+      "--no-harness-workspace",
+      "--api-url",
+      "https://api.test",
+    ]);
+
+    expect(calls.find((call) => call.path === "/cli/device-code")?.body).toMatchObject({
+      intent: "init",
+    });
+    const handoffs = calls.filter((call) => call.path === "/cli/device-code/handoff");
+    expect(handoffs.map((call) => call.body?.status)).toEqual([
+      "provisioning",
+      "provisioning",
+      "starting",
+      "ready",
+    ]);
+    const ready = handoffs.at(-1)?.body;
+    expect(ready).toMatchObject({
+      deviceCode: "dc_1",
+      deviceId: "prof_claim",
+      sessionId: "sess_claim",
+      status: "ready",
+    });
+    expect(JSON.stringify(ready)).not.toMatch(/h5_should_not_be_handed_off|viewerUrl|relayUrl|token/i);
   });
 });

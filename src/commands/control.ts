@@ -186,7 +186,7 @@ function getTransport(program: Command): {
     console.error("Not connected.");
     console.error("Reason: " + resolved.error.reason);
     console.error(
-      "Hint: run `handheld connect --local` (local adb device/emulator) or `handheld connect <device-id>` (cloud phone) first; see `handheld guide workflow`."
+      "Hint: run `handheld connect --help` to choose cloud or local. First-run cloud setup is `handheld init`; existing cloud devices use `handheld connect <device-id>`; local adb/emulators use `handheld connect --local [serial]`."
     );
     process.exit(1);
   }
