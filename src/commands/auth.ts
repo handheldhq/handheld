@@ -792,11 +792,10 @@ Caveats:
                 }),
                 deviceId,
                 // Browser-approved init already has a claim tab whose phone
-                // frame owns the human viewer. Do not also pop the raw Gateway
-                // /live tab, or Chrome may background the claim frame during H5
-                // warmup. Env/config init still opens the direct viewer. See
-                // docs/handheld-init-live-viewer-proof-2026-06-03.md.
+                // frame owns the human viewer. Env/config init opens the
+                // external app viewer instead of the raw Gateway /live token.
                 headed: opts.open !== false && !json && !login.deviceCode,
+                headedViewer: "external",
                 json,
                 ...(opts.sessionTtl && opts.sessionTtl > 0
                   ? { sessionTtlMs: Math.round(opts.sessionTtl * 60 * 60 * 1000) }
@@ -845,6 +844,7 @@ Caveats:
                           connected: connection.relay.connected,
                           viewerUrl: connection.relay.viewerUrl,
                         },
+                        externalLiveUrl: connection.externalLiveUrl,
                         tiny: connection.tiny
                           ? {
                               baseUrl: connection.tiny.baseUrl,
@@ -875,8 +875,9 @@ Caveats:
 
           if (deviceId) {
             console.log(`Default device: ${deviceId}`);
-            if (connection?.relay.viewerUrl) {
-              console.log(`Live view: ${connection.relay.viewerUrl}`);
+            const liveUrl = connection?.externalLiveUrl ?? connection?.relay.viewerUrl;
+            if (liveUrl) {
+              console.log(`Live view: ${liveUrl}`);
             }
             console.log("Ready: handheld tap, handheld swipe, handheld snap, and handheld shell can use this device.");
           } else {
@@ -951,6 +952,7 @@ Caveats:
               : await connectDevice({
                   api,
                   deviceId,
+                  headedViewer: "external",
                   json,
                   webrtcOnly: opts.withAdb !== true,
                   withAdb: opts.withAdb,
@@ -968,6 +970,7 @@ Caveats:
                           connected: connection.relay.connected,
                           viewerUrl: connection.relay.viewerUrl,
                         },
+                        externalLiveUrl: connection.externalLiveUrl,
                         tiny: connection.tiny
                           ? {
                               baseUrl: connection.tiny.baseUrl,
@@ -988,8 +991,9 @@ Caveats:
           }
 
           console.log(`Default device: ${deviceId}`);
-          if (connection?.relay.viewerUrl) {
-            console.log(`Live view: ${connection.relay.viewerUrl}`);
+          const liveUrl = connection?.externalLiveUrl ?? connection?.relay.viewerUrl;
+          if (liveUrl) {
+            console.log(`Live view: ${liveUrl}`);
           }
           console.log("Ready: handheld tap, handheld swipe, handheld snap, and handheld shell can use this device.");
         } catch (err) {
