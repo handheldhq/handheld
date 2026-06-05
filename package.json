@@ -4,13 +4,13 @@
   "description": "Real cloud phones for AI agents — Handheld CLI and MCP server",
   "license": "MIT",
   "author": "Bruce Weaver <hbw@lattice.sh>",
-  "homepage": "https://mobileuse.dev",
+  "homepage": "https://handheld.sh",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hbruceweaver/mobileuse.git"
+    "url": "git+https://github.com/handheldhq/handheld.git"
   },
   "bugs": {
-    "url": "https://github.com/hbruceweaver/mobileuse/issues"
+    "url": "https://github.com/handheldhq/handheld/issues"
   },
   "keywords": [
     "mobile",
@@ -38,6 +38,8 @@
     "android/tiny-snapshot-helper-v2",
     "assets",
     "dist",
+    "docs/agent-space-naming.md",
+    "install.md",
     "scripts/build-tiny-v2-helper.sh"
   ],
   "publishConfig": {
@@ -70,5 +72,6 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "packageManager": "pnpm@10.19.0"
 }

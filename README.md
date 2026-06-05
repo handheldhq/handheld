@@ -108,7 +108,7 @@ cloud auth; when it connects successfully, it saves that adb serial as the
 default device. Use `connect --help` to choose between cloud reconnects and
 local adb, and use `connect --local` only when the workspace already exists and
 you only need to attach a local device: it attaches over adb, bootstraps the Tiny helper on-device (the
-same path the [handheld-harness](https://github.com/) uses — they share one
+same path the [handheld-harness](https://github.com/handheldhq/handheld-harness) uses — they share one
 Tiny instance via a fixed token), and saves a relay-less connection marked
 `local`. Every control/observation command (`snap`, `tap`, `type`, `swipe`,
 `shell`, `screenshot`, …) runs without an API key; a key is only needed for

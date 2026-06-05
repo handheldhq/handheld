@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { getConfig } from "./state.js";
 
-export const DEFAULT_API_URL = "https://api.mobileuse.dev";
+export const DEFAULT_API_URL = "https://api.handheld.sh";
 
 export class AuthError extends Error {
   constructor(message: string) {

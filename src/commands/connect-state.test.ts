@@ -51,7 +51,7 @@ describe("connect local state preservation", () => {
       connectDevice({
         adbOnly: true,
         api: {
-          getBaseUrl: () => "https://api.mobileuse.dev",
+          getBaseUrl: () => "https://api.handheld.sh",
           getDevice: async () => ({
             activeSession: {
               adbEnabled: false,
@@ -124,7 +124,7 @@ describe("connect local state preservation", () => {
     const { connectDevice } = await import("./connect.js");
     const connected = connectDevice({
       api: {
-        getBaseUrl: () => "https://api.mobileuse.dev",
+        getBaseUrl: () => "https://api.handheld.sh",
         getDevice: async () => ({
           activeSession: null,
           device: { deviceId: "profile_1", status: "ready" },
@@ -204,7 +204,7 @@ describe("connect local state preservation", () => {
     await expect(
       connectDevice({
         api: {
-          getBaseUrl: () => "https://api.mobileuse.dev",
+          getBaseUrl: () => "https://api.handheld.sh",
           getDevice: async () => ({
             activeSession: null,
             device: { deviceId: "profile_1", status: "ready" },

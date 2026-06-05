@@ -2,7 +2,7 @@
 name: teach-from-human
 description: >-
   Synthesize a durable, replayable handheld domain-skill from a human's live
-  device demonstration (a mobile-use.trajectory.v1 bundle from the live viewer).
+  device demonstration (a handheld.trajectory.v1 bundle from the live viewer).
   Use ONLY when stuck on a device task and ALL four gates hold: (1) two distinct
   autonomous approaches were tried and re-observed with no progress; (2) the
   blocker is a knowledge gap, not a transient (loading/Tiny bootstrap settle on
@@ -21,7 +21,7 @@ description: >-
 
 Convert one human-recorded device demonstration into a durable, replayable
 workflow. The human acts through the live device viewer; the viewer records a
-`mobile-use.trajectory.v1` bundle (exact actions, frames, optional voice). This
+`handheld.trajectory.v1` bundle (exact actions, frames, optional voice). This
 skill runs the holotab teach-synthesis methodology over that bundle and writes
 a per-package domain-skill the agent replays — and verifies — on the next run.
 
@@ -56,7 +56,7 @@ human is actually available.
 
 ## Inputs
 
-A `mobile-use.trajectory.v1` bundle (zip + extracted JSON) produced by the live
+A `handheld.trajectory.v1` bundle (zip + extracted JSON) produced by the live
 viewer, plus the human-language `objective`. The bundle's JSON carries
 `actions[]` (exact `pointer_tap` / `pointer_swipe` / `key` / agent actions with
 raw **and** normalized coordinates), frame-metadata + PNG frames, an optional
@@ -67,7 +67,7 @@ the synthesis fills. Full field shapes: `references/trajectory-schema.md`.
 trajectory JSON returned by `read_teach_artifact` once `teach_status` is
 `ready`, or an explicit path the user gave). Do not synthesize from fragments.
 If no bundle can be identified, refuse with:
-`No mobile-use.trajectory.v1 bundle found to synthesize. Run a teach recording first, or pass an explicit bundle path.`
+`No handheld.trajectory.v1 bundle found to synthesize. Run a teach recording first, or pass an explicit bundle path.`
 
 ## Synthesis workflow
 

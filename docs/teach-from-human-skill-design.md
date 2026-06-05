@@ -16,10 +16,10 @@ When the agent is stuck on a device task, it calls a first-party CLI command (`h
 
 ## Correction — the capture already exists (supersedes §2 + the §5 fidelity risk)
 
-The premise that "handheld can't capture input, so we must infer actions from snapshot-diffs" is **false**. Verified against a real exported bundle (`mu-trajectory-<deviceId>-<ts>.zip`, schema `mobile-use.trajectory.v1`) and its source:
+The premise that "handheld can't capture input, so we must infer actions from snapshot-diffs" is **false**. Verified against a real exported bundle (`handheld-trajectory-<deviceId>-<ts>.zip`, schema `handheld.trajectory.v1`) and its source:
 
 - **The live viewer is the recorder.** `apps/app/app/(authenticated)/devices/[deviceId]/live/lib/trajectory-recorder.ts` (class `TrajectoryRecorder`) + `live-view.tsx`. The human acts **through** the web viewer — their pointer input on the video surface (`beginPointerGesture`) is translated by the viewer into the actual device action and sent over the relay. Because the **viewer originates the action, it records it exactly** — every action the viewer sends is wrapped by `recorder.recordAction(...)`. There is no inference and no fidelity gap; this is *better* than the holotab DOM extension, not worse.
-- **What's actually captured** (`mobile-use.trajectory.v1`): `actions[]` with exact args — `pointer_tap {x, y, normalized{x,y}}`, `pointer_swipe {x1,y1,x2,y2, delta, normalized{from,to,delta}, durationMs}`, `key {key}` — each with `source` (`phone` | `nav` | `toolbar`), `tStart`/`tEnd`/`durationMs`, `viewport {w,h}`, and `preFrame`/`postFrame` screenshots. Plus `frames[]`, a browser-SpeechRecognition `transcript` + `audio.webm`, an `alignment[]` (action ↔ transcript segment), and a **`skillDraft` placeholder** the schema already reserves for exactly this synthesis. Note: **both raw and *normalized* coordinates are captured**, which solves cross-resolution replay portability for free.
+- **What's actually captured** (`handheld.trajectory.v1`): `actions[]` with exact args — `pointer_tap {x, y, normalized{x,y}}`, `pointer_swipe {x1,y1,x2,y2, delta, normalized{from,to,delta}, durationMs}`, `key {key}` — each with `source` (`phone` | `nav` | `toolbar`), `tStart`/`tEnd`/`durationMs`, `viewport {w,h}`, and `preFrame`/`postFrame` screenshots. Plus `frames[]`, a browser-SpeechRecognition `transcript` + `audio.webm`, an `alignment[]` (action ↔ transcript segment), and a **`skillDraft` placeholder** the schema already reserves for exactly this synthesis. Note: **both raw and *normalized* coordinates are captured**, which solves cross-resolution replay portability for free.
 - **Open question #1 (touch coordinates) is ANSWERED** — yes, we have them, exactly, today. The whole "spike getevent / Gateway control channel" investigation is unnecessary.
 
 ### Re-mapped gaps (what's actually left to build)
@@ -28,7 +28,7 @@ The premise that "handheld can't capture input, so we must infer actions from sn
 |---|---|---|
 | Record the human's actions (exact, + frames + voice) | ✅ **EXISTS** | live viewer `TrajectoryRecorder` |
 | Open the live viewer for the human | ✅ **EXISTS** | `connect.ts` `--headed` → `openUrl(viewerUrl)` |
-| Bundle the trajectory (`mobile-use.trajectory.v1` zip) | ✅ **EXISTS** | `downloadTrajectoryBundle` (`trajectory-exporter`) |
+| Bundle the trajectory (`handheld.trajectory.v1` zip) | ✅ **EXISTS** | `downloadTrajectoryBundle` (`trajectory-exporter`) |
 | **Handoff: get the bundle to the agent** | ❌ **net-new (the real gap)** | today it's a *browser download only* — no server persistence (no API route). The viewer already has direct-upload plumbing (`putFileToDirectUploadUrl`) — lean on it. |
 | **Arm "record mode" from the agent** | ❌ net-new (small) | viewer record is a manual button; want a viewer URL param/deep-link the agent can open pre-armed |
 | **Synthesis skill (trajectory → durable workflow)** | ❌ net-new (unchanged from below) | the `teach-from-human` skill in §3 — fills `skillDraft` |
@@ -36,10 +36,10 @@ The premise that "handheld can't capture input, so we must infer actions from sn
 
 ### What this changes in the design below
 
-- **§1 / §2:** the CLI command does **not** build a recorder or a snapshot-diff inference engine (delete that). It (a) opens the viewer **pre-armed to record** (`--headed` + a record intent), and (b) **retrieves the bundle** when the human is done. The recording state machine, frame capture, and the entire `inferredAction`/`confidence` apparatus are **moot** — read the real `mobile-use.trajectory.v1` schema instead.
+- **§1 / §2:** the CLI command does **not** build a recorder or a snapshot-diff inference engine (delete that). It (a) opens the viewer **pre-armed to record** (`--headed` + a record intent), and (b) **retrieves the bundle** when the human is done. The recording state machine, frame capture, and the entire `inferredAction`/`confidence` apparatus are **moot** — read the real `handheld.trajectory.v1` schema instead.
 - **§5:** "recording fidelity is the biggest risk" is **deleted.** The new #1 risk/gap is the **handoff** (bundle is client-download-only — MVP: agent watches `~/Downloads/mu-trajectory-*.zip`; proper: viewer uploads to Gateway on stop + a `handheld trajectory pull <session>` command using the existing upload plumbing). The security constraint (never store credentials), the four-gate trigger, and the brittle-deterministic-replay risk all still hold.
-- **Component boundary:** this feature lives **across two codebases** — the **live viewer** (`mobile-use-mono/.../live/`, capture: done) and the **handheld CLI + skill** (handoff + synthesis: to build). The original doc framed it as CLI-only; it isn't.
-- **Revised phased plan:** Phase 0 (one-line hint → domain-skill) still first. Phase 1 becomes **"wire the existing viewer recorder to the agent"** — `handheld teach` opens the pre-armed viewer, the human records via the viewer that already works, the bundle reaches the agent (Downloads-watch MVP, then upload+pull), and the `teach-from-human` skill synthesizes a domain-skill from the real `mobile-use.trajectory.v1`. No recorder to build.
+- **Component boundary:** this feature lives **across two codebases** — the **live viewer** and the **handheld CLI + skill** (handoff + synthesis: to build). The original doc framed it as CLI-only; it isn't.
+- **Revised phased plan:** Phase 0 (one-line hint → domain-skill) still first. Phase 1 becomes **"wire the existing viewer recorder to the agent"** — `handheld teach` opens the pre-armed viewer, the human records via the viewer that already works, the bundle reaches the agent (Downloads-watch MVP, then upload+pull), and the `teach-from-human` skill synthesizes a domain-skill from the real `handheld.trajectory.v1`. No recorder to build.
 
 The sections below are preserved for the parts that remain valid (trigger, synthesis methodology, artifact, wiring, security); read §2 and §5 through this correction.
 

@@ -7,7 +7,7 @@ what mobile requires was changed:
 - "never pixel coordinates" now means: target by **resource-id > label >
   normalized-coordinate fallback** (Android accessibility handles); raw pixel
   `{x, y}` is forbidden in durable output.
-- input is a `mobile-use.trajectory.v1` bundle (not a browser DOM trace).
+- input is a `handheld.trajectory.v1` bundle (not a browser DOM trace).
 - output is written as a handheld domain-skill markdown + a `workflow.json`.
 - a non-negotiable credential rule (sensitive fill → `{credential}`, no value).
 
@@ -35,7 +35,7 @@ an AI agent can follow to repeat the task on the same app.
 
 # What You Receive
 
-- **Trajectory** (`mobile-use.trajectory.v1`): an ordered `actions[]` log. Each
+- **Trajectory** (`handheld.trajectory.v1`): an ordered `actions[]` log. Each
   action has a type (`pointer_tap`, `pointer_swipe`, `key`, or an agent action
   such as `open_app`/`fill`/`scroll`/`back`), exact args with BOTH raw pixel and
   normalized [0,1] coordinates, a `preFrame` and `postFrame` screenshot path,

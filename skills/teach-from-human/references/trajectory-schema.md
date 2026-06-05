@@ -1,4 +1,4 @@
-# `mobile-use.trajectory.v1` — input schema
+# `handheld.trajectory.v1` — input schema
 
 The bundle the live viewer records and hands to this skill. The viewer
 originates each device action, so it records the action **exactly** (no
@@ -19,7 +19,7 @@ portability at the schema level.
 
 ```jsonc
 {
-  "schema": "mobile-use.trajectory.v1",
+  "schema": "handheld.trajectory.v1",
   "version": 1,
   "deviceId": "string",
   "sessionId": "string | null",

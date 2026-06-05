@@ -7,8 +7,8 @@ import {
 } from "./auth.js";
 
 describe("published API defaults", () => {
-  it("uses the public mobileuse API domain by default", () => {
-    expect(DEFAULT_API_URL).toBe("https://api.mobileuse.dev");
+  it("uses the public handheld API domain by default", () => {
+    expect(DEFAULT_API_URL).toBe("https://api.handheld.sh");
     expect(DEFAULT_API_URL).not.toContain("workers.dev");
   });
 });

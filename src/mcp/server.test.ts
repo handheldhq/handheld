@@ -198,7 +198,7 @@ describe("MCP tool list", () => {
     const bundleDir = join(teachDir, "bundle");
     mkdirSync(bundleDir, { recursive: true });
     const trajectoryPath = join(bundleDir, "trajectory.json");
-    writeFileSync(trajectoryPath, JSON.stringify({ schema: "mobile-use.trajectory.v1", actions: [] }) + "\n");
+    writeFileSync(trajectoryPath, JSON.stringify({ schema: "handheld.trajectory.v1", actions: [] }) + "\n");
     writeFileSync(join(teachDir, "envelope.json"), JSON.stringify({
       schema: "handheld.teach.envelope.v1",
       teachId: "teach-1",
@@ -232,7 +232,7 @@ describe("MCP tool list", () => {
       teachId: "teach-1",
     });
     expect(JSON.parse(String(trajectory.content))).toMatchObject({
-      schema: "mobile-use.trajectory.v1",
+      schema: "handheld.trajectory.v1",
     });
   });
 

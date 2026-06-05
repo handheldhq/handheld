@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Release metadata now points at the public handheldhq/handheld repository, and the npm package ships the linked install/agent-space docs.
+- The default Gateway API URL is now https://api.handheld.sh instead of the legacy api.mobileuse.dev host.
+
 - `init --local` now honors `--local-serial`, then the root `--device` flag, then `HANDHELD_DEVICE` for device selection (mirrors `run` and the env the root `--device` flag documents) — a pinned device "just works" instead of erroring on multi-device.
 - The multi-device "Multiple adb devices" error now names the command you ran: `init` points at `handheld init --local --local-serial <serial>` (was: always `handheld connect --local <serial>`, which `init` rejects as a positional arg). Docs (README + install.md local sections) now show `--local-serial` for the multi-device case.
 - `status` (disconnected) hint now points local users at `handheld connect --local [serial]` instead of framing local adb as "advanced dev/CI only".
