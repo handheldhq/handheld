@@ -242,21 +242,30 @@ async function refreshRelay(): Promise<Transport | null> {
       // fall back to a direct RelayClient below
     }
   }
-  const refreshed: Connection = {
-    ...conn,
-    relay: {
-      connected: true,
-      daemonPid,
-      relayUrl,
-      socketPath,
-      viewerUrl: relayInfo.h5?.viewerUrl ?? conn.relay?.viewerUrl,
-    },
-  };
+  const refreshed = connectionWithRefreshedRelay(conn, relayInfo, { daemonPid, socketPath });
   currentConnection = refreshed;
   saveConnection(refreshed);
   return socketPath
     ? new RelayDaemonTransport(socketPath)
     : new RelayClient(relayUrl, getAuthorizationHeaders());
+}
+
+export function connectionWithRefreshedRelay(
+  conn: Connection,
+  relayInfo: { h5?: { viewerUrl?: string } | null; relayUrl: string; sessionId?: string },
+  daemon?: { daemonPid?: number; socketPath?: string }
+): Connection {
+  return {
+    ...conn,
+    sessionId: relayInfo.sessionId ?? conn.sessionId,
+    relay: {
+      connected: true,
+      daemonPid: daemon?.daemonPid,
+      relayUrl: relayInfo.relayUrl,
+      socketPath: daemon?.socketPath,
+      viewerUrl: relayInfo.h5?.viewerUrl ?? conn.relay?.viewerUrl,
+    },
+  };
 }
 
 async function disconnectRelay(relay: Transport | null): Promise<void> {
@@ -1444,7 +1453,6 @@ async function ensureDeviceTiny(input: {
     deviceId: input.connection.deviceId,
     filename: basename(bundledTinyApkPath()),
     localFile: bundledTinyApkPath(),
-    sessionId: input.connection.sessionId,
   });
   await runShellString(
     input.relay,
@@ -3117,7 +3125,6 @@ Caveats:
           customizeFilePath: destination,
           deviceId,
           localFile,
-          sessionId: connection.sessionId,
         });
         if (program.opts().json) console.log(JSON.stringify(result));
         else console.log(`Pushed to ${result.path ?? destination}`);
@@ -3241,7 +3248,6 @@ Caveat: installs only — run \`handheld tiny start\` afterward, or just use
           deviceId: connection.deviceId,
           filename: basename(bundledTinyApkPath()),
           localFile: bundledTinyApkPath(),
-          sessionId: connection.sessionId,
         });
         await runShellString(
           relay,
@@ -3331,7 +3337,6 @@ Caveats:
           localFile,
           packageName: opts.package,
           persist: opts.persist,
-          sessionId: connection.sessionId,
         });
         if (program.opts().json) console.log(JSON.stringify(result));
         else console.log(`Uploaded to ${result.path ?? "session"}`);
@@ -3389,7 +3394,6 @@ Gateway session. A URL is fetched and installed server-side via the session.`
           deviceId,
           localFile: source,
           packageName: basename(source).replace(/\.apk$/i, ""),
-          sessionId: connection.sessionId,
         });
         if (program.opts().json) console.log(JSON.stringify(result));
         else console.log("Install task completed:", result.taskId ?? "ok");

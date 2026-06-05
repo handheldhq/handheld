@@ -9,6 +9,7 @@ describe("connect local state preservation", () => {
     vi.doUnmock("../auth.js");
     vi.doUnmock("../transport/relay/client.js");
     vi.doUnmock("../transport/relay/daemon.js");
+    vi.doUnmock("../tiny-helper.js");
   });
 
   it("keeps a healthy relay connection if an ADB upgrade fails", async () => {
@@ -236,5 +237,96 @@ describe("connect local state preservation", () => {
     });
     expect(recoverSessionAdb).toHaveBeenCalledWith("session_2");
     expect(saveConnection).toHaveBeenCalled();
+  });
+
+  it("saves relay and ADB state before Tiny warmup fails", async () => {
+    const saveConnection = vi.fn();
+    const setConfig = vi.fn();
+
+    vi.doMock("../state.js", () => ({
+      setConfig,
+      getConfig: vi.fn(() => ({})),
+      getConnection: vi.fn(() => undefined),
+      getRelayState: vi.fn(),
+      removeConnection: vi.fn(),
+      saveConnection,
+    }));
+    vi.doMock("../auth.js", () => ({
+      getAuthorizationHeaders: () => ({ Authorization: "Bearer test" }),
+      getResolvedDevice: () => undefined,
+    }));
+    vi.doMock("../transport/relay/client.js", () => ({
+      RelayClient: class {
+        async connect() {}
+        async disconnect() {}
+      },
+    }));
+    vi.doMock("../transport/relay/daemon.js", () => ({
+      spawnRelayDaemon: vi.fn(async () => ({
+        pid: 123,
+        socketPath: "/tmp/handheld.sock",
+      })),
+    }));
+    vi.doMock("../transport/adb/daemon.js", () => ({
+      spawnTunnelDaemon: vi.fn(async () => ({
+        adbSerial: "127.0.0.1:59048",
+        localPort: 59048,
+        pid: 456,
+      })),
+    }));
+    vi.doMock("../tiny-helper.js", () => ({
+      startTinyHelper: vi.fn(async () => {
+        throw new Error("Tiny helper did not become ready");
+      }),
+    }));
+
+    const { connectDevice } = await import("./connect.js");
+    await expect(
+      connectDevice({
+        api: {
+          getBaseUrl: () => "https://api.handheld.sh",
+          getDevice: async () => ({
+            activeSession: {
+              adbEnabled: true,
+              h5: { viewerUrl: "/live/token" },
+              h5Enabled: true,
+              padCode: "pad_1",
+              sessionId: "session_1",
+              status: "active",
+            },
+            device: { deviceId: "profile_1", status: "active" },
+          }),
+          getDeviceRelayInfo: async () => ({
+            h5: { viewerUrl: "/live/token" },
+            relayUrl: "wss://relay.test/cli",
+            sessionId: "session_1",
+          }),
+          recoverSessionAdb: async () => ({
+            key: "secret",
+            sshCommand: "ssh -p 22 root@example",
+            tunnel: { host: "127.0.0.1", port: 22 },
+          }),
+        } as never,
+        deviceId: "profile_1",
+        json: true,
+      }),
+    ).resolves.toMatchObject({
+      adb: { serial: "127.0.0.1:59048" },
+      deviceId: "profile_1",
+      relay: { connected: true },
+      sessionId: "session_1",
+      tiny: undefined,
+    });
+
+    expect(saveConnection).toHaveBeenCalledTimes(1);
+    const saved = saveConnection.mock.calls[0]?.[0] as Connection;
+    expect(saved).toMatchObject({
+      adb: expect.objectContaining({ serial: "127.0.0.1:59048" }),
+      deviceId: "profile_1",
+      relay: expect.objectContaining({ connected: true }),
+      sessionId: "session_1",
+    });
+    expect(saved).not.toHaveProperty("tiny");
+    expect(setConfig).toHaveBeenCalledWith({ defaultDevice: "profile_1" });
   });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { failedBeforeReachingDevice, shouldFallbackToAdb } from "./control.js";
+import type { Connection } from "../state.js";
+import {
+  connectionWithRefreshedRelay,
+  failedBeforeReachingDevice,
+  shouldFallbackToAdb,
+} from "./control.js";
 
 describe("relay -> adb fallback safety (no-resend-on-mutating, #5)", () => {
   const fail = (error?: string) => ({ ok: false as const, error });
@@ -48,5 +53,50 @@ describe("relay -> adb fallback safety (no-resend-on-mutating, #5)", () => {
     expect(failedBeforeReachingDevice("This operation was aborted")).toBe(false);
     expect(failedBeforeReachingDevice("ETIMEDOUT")).toBe(false);
     expect(failedBeforeReachingDevice(undefined)).toBe(false);
+  });
+});
+
+describe("relay refresh state", () => {
+  const connection: Connection = {
+    adb: { serial: "127.0.0.1:5555", sshPid: 123, tunnelPort: 5555 },
+    connectedAt: "2026-06-05T00:00:00.000Z",
+    deviceId: "device_1",
+    padCode: "PAD",
+    relay: {
+      connected: true,
+      relayUrl: "wss://old-relay",
+      viewerUrl: "https://old-viewer",
+    },
+    sessionId: "session_old",
+  };
+
+  it("updates the cached session id when Gateway rolls the relay to a new active session", () => {
+    const refreshed = connectionWithRefreshedRelay(
+      connection,
+      {
+        h5: { viewerUrl: "https://new-viewer" },
+        relayUrl: "wss://new-relay",
+        sessionId: "session_new",
+      },
+      { daemonPid: 456, socketPath: "/tmp/handheld.sock" }
+    );
+
+    expect(refreshed.sessionId).toBe("session_new");
+    expect(refreshed.relay).toEqual({
+      connected: true,
+      daemonPid: 456,
+      relayUrl: "wss://new-relay",
+      socketPath: "/tmp/handheld.sock",
+      viewerUrl: "https://new-viewer",
+    });
+  });
+
+  it("keeps the cached session id when Gateway returns only a fresh relay URL", () => {
+    const refreshed = connectionWithRefreshedRelay(connection, {
+      relayUrl: "wss://new-relay",
+    });
+
+    expect(refreshed.sessionId).toBe("session_old");
+    expect(refreshed.relay?.viewerUrl).toBe("https://old-viewer");
   });
 });

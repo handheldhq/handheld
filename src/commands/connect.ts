@@ -567,29 +567,32 @@ export async function connectDevice(
     throw new Error("No transport became available for this device");
   }
 
-  let tinyState: TinyHelperState | undefined;
-  if (adbState.serial && opts.startTiny !== false) {
-    try {
-      printConnectProgress(json, "Tiny helper... ");
-      tinyState = await startTinyHelper({ serial: adbState.serial });
-      printConnectLine(json, "ok");
-    } catch (err) {
-      printConnectLine(json, `skipped (${(err as Error).message})`);
-    }
-  }
-
-  saveConnection({
+  const connection: Connection = {
     deviceId: resolvedDevice,
     sessionId,
     padCode: startResult?.h5?.padCode ?? liveDetail?.activeSession?.padCode ?? "",
     relay: relayState,
     adb: adbState,
     connectedAt: new Date().toISOString(),
-    tiny: tinyState,
     ...(opts.sessionTtlMs ? { sessionTtlMs: opts.sessionTtlMs } : {}),
-  });
-  // Make the just-connected device the default so bare commands target it.
+  };
+
+  // Tiny warmup can be slow or interrupted. Preserve the usable relay/ADB
+  // attachment first so follow-up commands can still target this device.
+  saveConnection(connection);
   setConfig({ defaultDevice: resolvedDevice });
+
+  let tinyState: TinyHelperState | undefined;
+  if (adbState.serial && opts.startTiny !== false) {
+    try {
+      printConnectProgress(json, "Tiny helper... ");
+      tinyState = await startTinyHelper({ serial: adbState.serial });
+      saveConnection({ ...connection, tiny: tinyState });
+      printConnectLine(json, "ok");
+    } catch (err) {
+      printConnectLine(json, `skipped (${(err as Error).message})`);
+    }
+  }
 
   if (opts.headed && relayState.viewerUrl) {
     openUrl(relayState.viewerUrl);

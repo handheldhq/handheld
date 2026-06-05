@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- `connect` now persists relay/ADB state before Tiny helper warmup, so follow-up commands keep working if Tiny startup fails or is interrupted.
+- Relay refresh now updates the cached session id when Gateway rolls a device to a new active session, and upload/install paths resolve the active session instead of forcing stale local state.
+
 - Release metadata now points at the public handheldhq/handheld repository, and the npm package ships the linked install/agent-space docs.
 - The default Gateway API URL is now https://api.handheld.sh instead of the legacy api.mobileuse.dev host.
 
