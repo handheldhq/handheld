@@ -152,7 +152,7 @@ function commandJson(program: Command, opts?: { json?: boolean }): boolean {
 
 export function registerStatusCommand(program: Command): void {
   program
-    .command("status")
+    .command("status [deviceId]")
     .description("show active connections and transport health (relay + ADB liveness per device)")
     .option("--json", "output as JSON")
     .option("--prune", "remove saved connections with no usable relay or ADB transport")
@@ -161,10 +161,11 @@ export function registerStatusCommand(program: Command): void {
       [
         "",
         "Arg grammar:",
-        "  handheld status [--json] [--prune]",
+        "  handheld status [deviceId] [--json] [--prune]",
         "",
         "Examples:",
         "  handheld status          # per-device: session, relay ready/offline, ADB serial + tunnel liveness",
+        "  handheld status prof_123 # one saved device connection",
         "  handheld status --json   # same, structured (probes the relay live when auth is available)",
         "  handheld status --prune  # remove stale local connection records",
         "",
@@ -173,14 +174,17 @@ export function registerStatusCommand(program: Command): void {
         "  - Relay offline or ADB dead means the transport dropped; run handheld init to refresh the default cloud path.",
       ].join("\n")
     )
-    .action(async (opts: { json?: boolean; prune?: boolean } = {}) => {
+    .action(async (deviceId: string | undefined, opts: { json?: boolean; prune?: boolean } = {}) => {
       const json = commandJson(program, opts);
-      const connections = getConnections();
+      const targetDeviceId = deviceId ?? program.opts<{ device?: string }>().device;
+      const connections = targetDeviceId
+        ? getConnections().filter((conn) => conn.deviceId === targetDeviceId)
+        : getConnections();
 
       if (connections.length === 0) {
         if (json) console.log(JSON.stringify({ connections: [], pruned: [] }));
         else {
-          console.log("No active connections.");
+          console.log(targetDeviceId ? `No saved connection for ${targetDeviceId}.` : "No active connections.");
           console.log("Hint: run handheld init to claim/connect a trial cloud phone and scaffold this project.");
           console.log("Existing cloud profiles reconnect with handheld connect <device-id>; for a local adb device/emulator use handheld connect --local [serial].");
         }

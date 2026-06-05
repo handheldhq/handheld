@@ -112,6 +112,21 @@ describe("status and doctor commands", () => {
     ]);
   });
 
+  it("status <deviceId> filters to one saved connection", async () => {
+    const state = await import("../state.js");
+    state.saveConnection(connection({ deviceId: "device-a", sessionId: "session-a" }));
+    state.saveConnection(connection({ deviceId: "device-b", sessionId: "session-b" }));
+
+    const output = await runStatusCommand(["status", "device-b", "--json"]);
+    const report = JSON.parse(output);
+
+    expect(report.connections).toHaveLength(1);
+    expect(report.connections[0]).toMatchObject({
+      deviceId: "device-b",
+      sessionId: "session-b",
+    });
+  });
+
   it("status --prune removes relay records whose saved socket path is present but not live", async () => {
     const state = await import("../state.js");
     const socketPath = join(home, "dead.sock");

@@ -16,7 +16,7 @@ export function isStaleSessionError(error: string | undefined): boolean {
   // looks exactly like this. Connect-time rejection means the command never
   // reached the device, so a refresh + retry is safe (idempotent).
   if (/unexpected server response:\s*40[0-3]\b/i.test(error)) return true;
-  return /uuid|绑定|不一致|invalid live token|live token expired|session (?:has )?(?:already )?(?:exited|expired|ended|not active|invalid)|live token|already exited/i.test(
+  return /uuid|绑定|不一致|invalid live token|live token expired|session (?:has |is )?(?:already )?(?:exited|expired|ended|not active|invalid)|live token|already exited/i.test(
     error
   );
 }

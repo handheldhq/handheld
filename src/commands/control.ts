@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import type { Command } from "commander";
 import { getRelayState, saveConnection, type Connection, type TinyState } from "../state.js";
 import { resolveConnection } from "../connection-health.js";
@@ -30,11 +30,8 @@ import {
   tinyClipboardGet,
   tinyClipboardSet,
   TINY_DEVICE_PORT,
-  TINY_PACKAGE,
   tinyDeviceInstallCommand,
-  tinyDeviceRequestCommand,
   tinyDeviceStartCommand,
-  tinyDeviceUninstallCommand,
   type TinyInputOptions,
   tinyInputBody,
   tinyScreenshot,
@@ -45,6 +42,15 @@ import {
   tinyWaitForStablePath,
   waitTinyStable,
 } from "../tiny-helper.js";
+import {
+  ensureDeviceTiny,
+  readTinyJsonFromDevice,
+  runShellString,
+  TINY_AGENT_SNAPSHOT_PATH,
+  TINY_REMOTE_APK,
+  uploadSessionFile,
+  waitForDeviceTiny,
+} from "./tiny-bootstrap.js";
 import {
   failedBeforeReachingDevice,
   tryServerSettle,
@@ -905,60 +911,6 @@ async function attachForegroundComponent(
   }
 }
 
-async function runShellString(
-  relay: Transport | null,
-  adb: AdbTransport | null,
-  command: string,
-  label: string
-): Promise<string> {
-  const result = await runShell(relay, adb, command);
-  assertOk(result, label);
-  return String(result.data ?? "");
-}
-
-async function uploadSessionFile(input: {
-  api: HandheldApiClient;
-  autoInstall?: boolean;
-  chmod?: string;
-  contentType?: string;
-  customizeFilePath?: string;
-  deviceId: string;
-  filename?: string;
-  libraryPath?: string;
-  localFile: string;
-  packageName?: string;
-  persist?: boolean;
-  sessionId?: string;
-}) {
-  const sessionId =
-    input.sessionId || await input.api.resolveActiveSessionId(input.deviceId);
-  const size = statSync(input.localFile).size;
-  const filename = input.filename ?? basename(input.localFile);
-  const intent = await input.api.createSessionUploadIntent(sessionId, {
-    filename,
-    persist: input.persist,
-    size,
-  });
-  const bytes = readFileSync(input.localFile);
-  const put = await fetch(intent.uploadUrl, {
-    body: bytes,
-    method: "PUT",
-  });
-  if (!put.ok) {
-    throw new Error(`Upload failed with HTTP ${put.status}`);
-  }
-  return await input.api.commitSessionUpload(sessionId, {
-    autoInstall: input.autoInstall,
-    chmod: input.chmod,
-    contentType: input.contentType,
-    customizeFilePath: input.customizeFilePath,
-    filename,
-    key: intent.key,
-    libraryPath: input.libraryPath,
-    packageName: input.packageName,
-  });
-}
-
 async function listPackagesAndActivities(
   relay: Transport | null,
   adb: AdbTransport | null,
@@ -1230,252 +1182,6 @@ async function clipboardGetResilient(
     (transport) => transport.clipboard("get"),
     { clipboardAction: "get" }
   );
-}
-
-const TINY_REMOTE_APK = "/data/local/tmp/handheld-tiny-snapshot-helper.apk";
-// Full Tiny snapshots can stall on the Settings app; bounded actionable refs stay fast.
-// Use /snapshot (not /observe) so the relay path matches local: same node shape
-// AND layoutDigest (the /observe observation shape drops it). normalizeTinySnapshot
-// consumes /snapshot identically over either transport. maxChars=32768 is Tiny's
-// per-chunk ceiling (ResponseStore.MAX_CHARS); the relay shell carries ~64KB per
-// round-trip, so responses <=32KB return in one shot (Tiny skips chunking when the
-// body fits) and larger ones need only a few refetches — vs ~20 at the old 2400.
-const TINY_AGENT_SNAPSHOT_PATH =
-  "/snapshot?interactiveOnly=1&compact=1&maxNodes=300&chunked=1&maxChars=32768";
-
-function parseTinyShellJson(output: string): Record<string, unknown> {
-  const trimmed = output.trim();
-  if (!trimmed) throw new Error("Tiny returned empty shell output");
-  const parsed = JSON.parse(trimmed) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Tiny returned non-object shell output");
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function isTinyChunkEnvelope(value: Record<string, unknown>): boolean {
-  return value.chunked === true && typeof value.id === "string" && typeof value.data === "string";
-}
-
-function chunkNextOffset(value: Record<string, unknown>): number | null {
-  const raw = value.nextOffset;
-  return typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : null;
-}
-
-function tinyStatusSupportsAgentShape(status: Record<string, unknown>): boolean {
-  return tinySupportsRequiredAgentShape(status);
-}
-
-function isTransientTinyRequestError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /ADB command timed out|timed out waiting for shell|Relay request timed out|closed before .* completed/i
-    .test(message);
-}
-
-async function readTinyJsonFromDevice(input: {
-  adb: AdbTransport | null;
-  body?: string;
-  maxTimeSec?: number;
-  method?: string;
-  path: string;
-  relay: Transport | null;
-  token: string;
-}): Promise<Record<string, unknown>> {
-  // Only idempotent GET reads (snapshot/observe/capture) retry on transient
-  // errors. A POST (e.g. /input) runs attempts=1 — never resend a mutating op
-  // that may have already executed on-device (no double-fire, #5).
-  const attempts =
-    !input.method || input.method.toUpperCase() === "GET"
-      ? (/^\/(snapshot|observe|capture)\b/.test(input.path) ? 3 : 1)
-      : 1;
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const parsed = parseTinyShellJson(
-        await runShellString(
-          input.relay,
-          input.adb,
-          tinyDeviceRequestCommand(input.path, input.token, {
-            body: input.body,
-            maxTimeSec: input.maxTimeSec,
-            method: input.method,
-          }),
-          `Tiny ${input.path} failed`
-        )
-      );
-      return isTinyChunkEnvelope(parsed)
-        ? await readTinyChunkedJsonFromDevice({
-            adb: input.adb,
-            first: parsed,
-            relay: input.relay,
-            token: input.token,
-          })
-        : parsed;
-    } catch (error) {
-      lastError = error;
-      if (attempt === attempts || !isTransientTinyRequestError(error)) break;
-      await runShell(input.relay, input.adb, tinyDeviceStartCommand(input.token)).catch(
-        () => undefined
-      );
-      await sleep(750);
-    }
-  }
-  throw lastError;
-}
-
-async function readTinyChunkedJsonFromDevice(input: {
-  adb: AdbTransport | null;
-  first: Record<string, unknown>;
-  relay: Transport | null;
-  token: string;
-}): Promise<Record<string, unknown>> {
-  const id = String(input.first.id);
-  let text = String(input.first.data ?? "");
-  let eof = input.first.eof === true;
-  let nextOffset = chunkNextOffset(input.first);
-  let reads = 0;
-  while (!eof && nextOffset !== null) {
-    reads += 1;
-    if (reads > 128) {
-      throw new Error(`Tiny chunked response ${id} did not finish`);
-    }
-    const chunk = parseTinyShellJson(
-      await runShellString(
-        input.relay,
-        input.adb,
-        tinyDeviceRequestCommand(`/responseChunk?id=${encodeURIComponent(id)}&offset=${nextOffset}&maxChars=32768`, input.token),
-        `Tiny response chunk ${id} failed`
-      )
-    );
-    if (chunk.ok === false) {
-      throw new Error(String(chunk.message ?? "Tiny response chunk failed"));
-    }
-    text += String(chunk.data ?? "");
-    eof = chunk.eof === true;
-    nextOffset = chunkNextOffset(chunk);
-  }
-  return parseTinyShellJson(text);
-}
-
-async function waitForDeviceTiny(input: {
-  adb: AdbTransport | null;
-  relay: Transport | null;
-  token: string;
-}): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + 15_000;
-  let lastError: unknown = null;
-  while (Date.now() <= deadline) {
-    try {
-      const status = await readTinyJsonFromDevice({
-        adb: input.adb,
-        path: "/status",
-        relay: input.relay,
-        token: input.token,
-      });
-      return status;
-    } catch (error) {
-      lastError = error;
-      await sleep(500);
-    }
-  }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`Tiny helper did not become ready: ${message}`);
-}
-
-// Is the Tiny helper APK already installed on the device? Lets the bootstrap
-// skip the slow upload+install (and, when absent, skip a wasted start probe).
-async function tinyPackageInstalled(
-  relay: Transport | null,
-  adb: AdbTransport | null,
-): Promise<boolean> {
-  try {
-    const result = await runShell(relay, adb, `pm list packages ${TINY_PACKAGE}`);
-    return result.ok && typeof result.data === "string" && result.data.includes(TINY_PACKAGE);
-  } catch {
-    return false;
-  }
-}
-
-async function ensureDeviceTiny(input: {
-  adb: AdbTransport | null;
-  // Lazy so a controller (local adb, or an already-running Tiny) never
-  // constructs a Gateway client — and so never requires an API key. The client
-  // is only built on the Gateway-upload fallback path below.
-  api: () => HandheldApiClient;
-  connection: Connection;
-  force?: boolean;
-  onProgress?: (message: string) => void;
-  relay: Transport | null;
-}): Promise<{ token: string }> {
-  const tokenState = ensureTinyToken();
-  if (input.force) {
-    // Force a clean reinstall: uninstall first (so the bundled APK definitely
-    // replaces a running/old-signed build) and skip the "already running"
-    // short-circuits below — fall straight through to upload + install + start.
-    input.onProgress?.("Force reinstall: uninstalling existing Tiny...");
-    await runShell(input.relay, input.adb, tinyDeviceUninstallCommand()).catch(() => undefined);
-  } else {
-    // 1) Already running and answering our token? Reuse — the fast path.
-    try {
-      const status = await readTinyJsonFromDevice({
-        adb: input.adb,
-        path: "/status",
-        relay: input.relay,
-        token: tokenState.token,
-      });
-      if (tinyStatusSupportsAgentShape(status)) return tokenState;
-    } catch {}
-
-    // 2) Already installed but not running? (Re)start it and wait — but only
-    // probe when the APK is actually present, otherwise we burn the 15s wait
-    // before falling through to install. When absent, skip straight to install.
-    if (await tinyPackageInstalled(input.relay, input.adb)) {
-      await runShell(input.relay, input.adb, tinyDeviceStartCommand(tokenState.token));
-      try {
-        const status = await waitForDeviceTiny({
-          adb: input.adb,
-          relay: input.relay,
-          token: tokenState.token,
-        });
-        if (tinyStatusSupportsAgentShape(status)) return tokenState;
-      } catch {}
-      // Installed but still unreachable — fall through and reinstall as a last
-      // resort (handles a corrupt/old-signed build).
-    }
-  }
-
-  input.onProgress?.(
-    "Getting Tiny installed on the device. First snapshot can take up to 30 seconds..."
-  );
-  await uploadSessionFile({
-    api: input.api(),
-    customizeFilePath: TINY_REMOTE_APK,
-    deviceId: input.connection.deviceId,
-    filename: basename(bundledTinyApkPath()),
-    localFile: bundledTinyApkPath(),
-  });
-  await runShellString(
-    input.relay,
-    input.adb,
-    tinyDeviceInstallCommand(TINY_REMOTE_APK),
-    "Tiny install failed"
-  );
-  input.onProgress?.("Tiny installed. Starting snapshot service...");
-  await runShellString(
-    input.relay,
-    input.adb,
-    tinyDeviceStartCommand(tokenState.token),
-    "Tiny start failed"
-  );
-  const status = await waitForDeviceTiny({
-    adb: input.adb,
-    relay: input.relay,
-    token: tokenState.token,
-  });
-  if (!tinyStatusSupportsAgentShape(status)) {
-    throw new Error("Tiny helper does not support agent-shaped observations");
-  }
-  return tokenState;
 }
 
 async function snapshotRaw(input: {

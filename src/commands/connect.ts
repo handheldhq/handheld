@@ -12,10 +12,12 @@ import {
 import { getAuthorizationHeaders, getResolvedDevice } from "../auth.js";
 import { spawnTunnelDaemon } from "../transport/adb/daemon.js";
 import { execAdb } from "../transport/adb/tunnel.js";
+import { AdbTransport } from "../transport/adb/client.js";
 import { spawnRelayDaemon } from "../transport/relay/daemon.js";
 import { RelayClient } from "../transport/relay/client.js";
 import { isStaleSessionError } from "../transport-errors.js";
 import { startTinyHelper, type TinyHelperState } from "../tiny-helper.js";
+import { ensureDeviceTiny } from "./tiny-bootstrap.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -194,6 +196,26 @@ function openUrl(url: string): boolean {
   }
 }
 
+const DEFAULT_EXTERNAL_APP_URL = "http://localhost:3000";
+
+export function buildExternalLiveUrl(input: {
+  appUrl?: string;
+  deviceId: string;
+  sessionId: string;
+}): string {
+  const appUrl = (
+    input.appUrl ||
+    process.env.HANDHELD_APP_URL ||
+    DEFAULT_EXTERNAL_APP_URL
+  ).trim();
+  const url = new URL(
+    "/live/" + encodeURIComponent(input.deviceId),
+    appUrl.endsWith("/") ? appUrl : appUrl + "/"
+  );
+  url.searchParams.set("sessionId", input.sessionId);
+  return url.toString();
+}
+
 function discardLocalConnection(conn: Connection): void {
   if (conn.adb.sshPid) {
     try {
@@ -230,8 +252,10 @@ function discardLocalConnection(conn: Connection): void {
 export interface ConnectDeviceOptions {
   adbOnly?: boolean;
   api?: HandheldApiClient;
+  appUrl?: string;
   deviceId: string;
   headed?: boolean;
+  headedViewer?: "raw" | "external";
   json?: boolean;
   // Per-device relay bridge-token lifetime (ms). Pins this device's sessions to
   // a longer TTL than the 1h default; persisted on the connection so refreshes
@@ -245,6 +269,7 @@ export interface ConnectDeviceOptions {
 export interface ConnectDeviceResult {
   adb: { serial: string; tunnelPort: number };
   deviceId: string;
+  externalLiveUrl?: string;
   relay: {
     connected: boolean;
     relayUrl: string;
@@ -302,6 +327,61 @@ async function startDeviceWithRetries(
   throw lastError;
 }
 
+async function warmCloudTiny(input: {
+  api: HandheldApiClient;
+  connection: Connection;
+  json: boolean;
+  relay?: RelayClient;
+  startTiny: boolean;
+}): Promise<TinyHelperState | undefined> {
+  if (!input.startTiny) return input.connection.tiny;
+
+  let relay = input.relay ?? null;
+  let ownsRelay = false;
+  if (!relay) {
+    const relayState = getRelayState(input.connection);
+    if (relayState?.connected && relayState.relayUrl) {
+      relay = new RelayClient(relayState.relayUrl, getAuthorizationHeaders());
+      ownsRelay = true;
+    }
+  }
+  const adb = input.connection.adb?.serial
+    ? new AdbTransport(input.connection.adb.serial)
+    : null;
+
+  try {
+    printConnectProgress(input.json, "Tiny helper... ");
+    await ensureDeviceTiny({
+      adb,
+      api: () => input.api,
+      connection: input.connection,
+      relay,
+    });
+
+    let tinyState: TinyHelperState | undefined;
+    if (input.connection.adb?.serial) {
+      try {
+        tinyState = await startTinyHelper({
+          serial: input.connection.adb.serial,
+        });
+        saveConnection({ ...input.connection, tiny: tinyState });
+      } catch {
+        tinyState = undefined;
+      }
+    }
+
+    printConnectLine(input.json, "ok");
+    return tinyState;
+  } catch (err) {
+    printConnectLine(input.json, `skipped (${(err as Error).message})`);
+    return undefined;
+  } finally {
+    if (ownsRelay && relay) {
+      await relay.disconnect().catch(() => undefined);
+    }
+  }
+}
+
 export async function connectDevice(
   opts: ConnectDeviceOptions
 ): Promise<ConnectDeviceResult> {
@@ -343,28 +423,29 @@ export async function connectDevice(
               process.platform === "win32" ||
               !!existing.relay?.socketPath;
             if (hasAdb && hasRelayDaemon) {
-              let tinyState = existing.tiny;
-              if (existingAdbSerial && opts.startTiny !== false && !tinyState) {
-                try {
-                  printConnectProgress(json, "Tiny helper... ");
-                  tinyState = await startTinyHelper({
-                    serial: existingAdbSerial,
-                  });
-                  saveConnection({
-                    ...existing,
-                    connectedAt: new Date().toISOString(),
-                    tiny: tinyState,
-                  });
-                  printConnectLine(json, "ok");
-                } catch (err) {
-                  printConnectLine(
-                    json,
-                    `skipped (${(err as Error).message})`
-                  );
-                }
-              }
-              if (opts.headed && relayState.viewerUrl) {
-                openUrl(relayState.viewerUrl);
+              const refreshedExisting = {
+                ...existing,
+                connectedAt: new Date().toISOString(),
+              };
+              saveConnection(refreshedExisting);
+              const tinyState = await warmCloudTiny({
+                api,
+                connection: refreshedExisting,
+                json,
+                relay,
+                startTiny: opts.startTiny !== false,
+              });
+              const externalLiveUrl =
+                opts.headedViewer === "external"
+                  ? buildExternalLiveUrl({
+                      appUrl: opts.appUrl,
+                      deviceId: resolvedDevice,
+                      sessionId: refreshedExisting.sessionId,
+                    })
+                  : undefined;
+              if (opts.headed) {
+                const headedUrl = externalLiveUrl ?? relayState.viewerUrl;
+                if (headedUrl) openUrl(headedUrl);
               }
               return {
                 adb: {
@@ -372,12 +453,13 @@ export async function connectDevice(
                   tunnelPort: existingAdbTunnelPort,
                 },
                 deviceId: resolvedDevice,
+                externalLiveUrl,
                 relay: {
                   connected: relayState.connected,
                   relayUrl: relayState.relayUrl,
                   viewerUrl: relayState.viewerUrl,
                 },
-                sessionId: existing.sessionId,
+                sessionId: refreshedExisting.sessionId,
                 tiny: tinyState,
               };
             }
@@ -582,20 +664,25 @@ export async function connectDevice(
   saveConnection(connection);
   setConfig({ defaultDevice: resolvedDevice });
 
-  let tinyState: TinyHelperState | undefined;
-  if (adbState.serial && opts.startTiny !== false) {
-    try {
-      printConnectProgress(json, "Tiny helper... ");
-      tinyState = await startTinyHelper({ serial: adbState.serial });
-      saveConnection({ ...connection, tiny: tinyState });
-      printConnectLine(json, "ok");
-    } catch (err) {
-      printConnectLine(json, `skipped (${(err as Error).message})`);
-    }
-  }
+  const tinyState = await warmCloudTiny({
+    api,
+    connection,
+    json,
+    startTiny: opts.startTiny !== false,
+  });
 
-  if (opts.headed && relayState.viewerUrl) {
-    openUrl(relayState.viewerUrl);
+  const externalLiveUrl =
+    opts.headedViewer === "external"
+      ? buildExternalLiveUrl({
+          appUrl: opts.appUrl,
+          deviceId: resolvedDevice,
+          sessionId,
+        })
+      : undefined;
+
+  if (opts.headed) {
+    const headedUrl = externalLiveUrl ?? relayState.viewerUrl;
+    if (headedUrl) openUrl(headedUrl);
   }
 
   return {
@@ -604,6 +691,7 @@ export async function connectDevice(
       tunnelPort: adbState.tunnelPort,
     },
     deviceId: resolvedDevice,
+    externalLiveUrl,
     relay: {
       connected: relayState.connected,
       relayUrl: relayState.relayUrl,
@@ -643,6 +731,9 @@ function printConnectResult(
           viewer: result.relay.viewerUrl
             ? { url: result.relay.viewerUrl }
             : null,
+          externalViewer: result.externalLiveUrl
+            ? { url: result.externalLiveUrl }
+            : null,
         },
         null,
         2
@@ -662,7 +753,9 @@ function printConnectResult(
   if (result.tiny) {
     console.log(`  Tiny:   ${result.tiny.baseUrl}`);
   }
-  if (result.relay.viewerUrl) {
+  if (result.externalLiveUrl) {
+    console.log("  Live view: " + result.externalLiveUrl);
+  } else if (result.relay.viewerUrl) {
     console.log(`  Viewer: ${result.relay.viewerUrl}`);
   }
 }
@@ -810,7 +903,12 @@ export function registerConnectCommand(program: Command): void {
     .description(
       "connect a device: cloud phone (relay + ADB dual transport, needs API key) or --local [serial] adb device (no key)"
     )
-    .option("--headed", "open a browser window with the remote device viewer")
+    .option("--headed", "open the external live viewer in a browser")
+    .option(
+      "--app-url <url>",
+      "web app origin for --headed external viewer",
+      process.env.HANDHELD_APP_URL || DEFAULT_EXTERNAL_APP_URL
+    )
     .option(
       "--local",
       "attach to a local adb device/emulator directly (no Gateway, no API key); optional [deviceId] selects the serial"
@@ -837,7 +935,8 @@ Arg grammar:
 Examples:
   handheld init                                  # first run: claim/connect a trial cloud phone
   handheld connect prof_abc123                   # cloud phone: start/reuse a session, relay + ADB
-  handheld connect prof_abc123 --headed          # cloud phone + open the live viewer in a browser
+  handheld connect prof_abc123 --headed          # cloud phone + open /live/<device>?sessionId=<session>
+  handheld connect prof_abc123 --headed --app-url https://cloud.handheld.sh
   handheld connect --local                       # local dev: attach one ready adb device/emulator
   handheld connect --local emulator-5554         # local dev: name the serial (see: adb devices)
 
@@ -860,6 +959,7 @@ Caveats:
           withAdb?: boolean;
           tiny?: boolean;
           sessionTtl?: number;
+          appUrl?: string;
         }
       ) => {
         const json = program.opts().json;
@@ -893,8 +993,10 @@ Caveats:
         try {
           const result = await connectDevice({
             adbOnly: opts?.adbOnly,
+            appUrl: opts?.appUrl,
             deviceId: resolvedDevice,
             headed: opts?.headed,
+            headedViewer: opts?.headed ? "external" : "raw",
             json,
             ...(opts?.sessionTtl && opts.sessionTtl > 0
               ? { sessionTtlMs: Math.round(opts.sessionTtl * 60 * 60 * 1000) }
